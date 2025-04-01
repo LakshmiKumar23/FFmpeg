@@ -3189,7 +3189,7 @@ av1_dxva2_hwaccel_select="av1_decoder"
 av1_nvdec_hwaccel_deps="nvdec CUVIDAV1PICPARAMS"
 av1_nvdec_hwaccel_select="av1_decoder"
 av1_amd_gpu_hwaccel_deps="rocdecode"
-av1_amd_gpu_hwaccel_deps="av1_decoder"
+av1_amd_gpu_hwaccel_select="av1_decoder"
 av1_vaapi_hwaccel_deps="vaapi VADecPictureParameterBufferAV1_bit_depth_idx"
 av1_vaapi_hwaccel_select="av1_decoder"
 av1_vdpau_hwaccel_deps="vdpau VdpPictureInfoAV1"
@@ -3213,7 +3213,7 @@ h264_dxva2_hwaccel_select="h264_decoder"
 h264_nvdec_hwaccel_deps="nvdec"
 h264_nvdec_hwaccel_select="h264_decoder"
 h264_amd_gpu_hwaccel_deps="rocdecode"
-h264_amd_gpu_hwaccel_deps="h264_decoder"
+h264_amd_gpu_hwaccel_select="h264_decoder"
 h264_vaapi_hwaccel_deps="vaapi"
 h264_vaapi_hwaccel_select="h264_decoder"
 h264_vdpau_hwaccel_deps="vdpau"
@@ -3233,7 +3233,7 @@ hevc_dxva2_hwaccel_select="hevc_decoder"
 hevc_nvdec_hwaccel_deps="nvdec"
 hevc_nvdec_hwaccel_select="hevc_decoder"
 hevc_amd_gpu_hwaccel_deps="rocdecode"
-hevc_amd_gpu_hwaccel_deps="hevc_decoder"
+hevc_amd_gpu_hwaccel_select="hevc_decoder"
 hevc_vaapi_hwaccel_deps="vaapi VAPictureParameterBufferHEVC"
 hevc_vaapi_hwaccel_select="hevc_decoder"
 hevc_vdpau_hwaccel_deps="vdpau VdpPictureInfoHEVC"
@@ -3307,7 +3307,7 @@ vp9_dxva2_hwaccel_select="vp9_decoder"
 vp9_nvdec_hwaccel_deps="nvdec"
 vp9_nvdec_hwaccel_select="vp9_decoder"
 vp9_amd_gpu_hwaccel_deps="rocdecode"
-vp9_amd_gpu_hwaccel_deps="vp9_decoder"
+vp9_amd_gpu_hwaccel_select="vp9_decoder"
 vp9_vaapi_hwaccel_deps="vaapi VADecPictureParameterBufferVP9_bit_depth"
 vp9_vaapi_hwaccel_select="vp9_decoder"
 vp9_vdpau_hwaccel_deps="vdpau VdpPictureInfoVP9"
@@ -7336,8 +7336,9 @@ if enabled uwp; then
     mediafoundation_extralibs="-lmfplat $mediafoundation_extralibs"
 fi
 
-enabled amd_gpu && 
-    check_headers rocdecode/rocdecode.h 
+enabled amd_gpu && add_cppflags '-I/opt/rocm/include/' && add_cppflags '-I/opt/rocm/share/' \
+        && add_cppflags '-D__HIP_PLATFORM_AMD__' && add_cxxflags '-std=c++17' && add_extralibs '/opt/rocm/lib/librocdecode.so'
+enabled amd_gpu && check_headers rocdecode/rocdecode.h
 
 enabled libdrm &&
     check_pkg_config libdrm_getfb2 libdrm "xf86drmMode.h" drmModeGetFB2
@@ -7486,10 +7487,10 @@ enabled amf &&
 #    disable amd_gpu
 #fi
 
-#if enabled amd_gpu; then
-#    check_cpp_condition amd_gpu "rocdecode/rocdecode_version.h" \
-#        "(ROCDECODE_MAJOR_VERSION >> 0 | ROCDECODE_MINOR_VERSION >> 6 | ROCDECODE_MINOR_VERSION >> 0)"
-#fi
+if enabled amd_gpu; then
+    check_cpp_condition amd_gpu "rocdecode/rocdecode_version.h" \
+        "(ROCDECODE_CHECK_VERSION(0,6,0))"
+fi
 
 # Funny iconv installations are not unusual, so check it after all flags have been set
 if enabled libc_iconv; then
