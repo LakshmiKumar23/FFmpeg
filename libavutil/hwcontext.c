@@ -69,6 +69,9 @@ static const HWContextType * const hw_table[] = {
 #if CONFIG_AMF
     &ff_hwcontext_type_amf,
 #endif
+#if CONFIG_AMD_GPU
+    &ff_hwcontext_type_rocdecode,
+#endif
     NULL,
 };
 
@@ -86,6 +89,7 @@ static const char *const hw_type_names[] = {
     [AV_HWDEVICE_TYPE_MEDIACODEC] = "mediacodec",
     [AV_HWDEVICE_TYPE_VULKAN] = "vulkan",
     [AV_HWDEVICE_TYPE_AMF] = "amf",
+    [AV_HWDEVICE_TYPE_ROCDECODE] = "rocdecode",
 };
 
 typedef struct FFHWDeviceContext {
@@ -105,6 +109,8 @@ typedef struct FFHWDeviceContext {
 
 enum AVHWDeviceType av_hwdevice_find_type_by_name(const char *name)
 {
+    av_log(NULL, AV_LOG_FATAL, "hwaccel name : %s.\n",
+        name);
     int type;
     for (type = 0; type < FF_ARRAY_ELEMS(hw_type_names); type++) {
         if (hw_type_names[type] && !strcmp(hw_type_names[type], name))

@@ -4227,6 +4227,10 @@ const FFCodec ff_hevc_decoder = {
 #if CONFIG_HEVC_NVDEC_HWACCEL
                                HWACCEL_NVDEC(hevc),
 #endif
+/*#if CONFIG_HEVC_ROCDECODE_HWACCEL
+                               HWACCEL_ROCDECODE(hevc),
+#endif
+*/
 #if CONFIG_HEVC_VAAPI_HWACCEL
                                HWACCEL_VAAPI(hevc),
 #endif

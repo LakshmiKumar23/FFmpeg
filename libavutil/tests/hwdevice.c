@@ -143,6 +143,8 @@ static const struct {
       { "0.0", "0.1", "1.0", "1.1" } },
     { AV_HWDEVICE_TYPE_VAAPI,
       { "/dev/dri/renderD128", "/dev/dri/renderD129", ":0", "0", "1" } },
+    { AV_HWDEVICE_TYPE_ROCDECODE,
+      { "/dev/dri/renderD128", "/dev/dri/renderD129" } },
 };
 
 static int test_device_type(enum AVHWDeviceType type)
