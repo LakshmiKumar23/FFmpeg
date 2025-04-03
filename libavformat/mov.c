@@ -32,7 +32,6 @@
 #include "libavutil/attributes.h"
 #include "libavutil/bprint.h"
 #include "libavutil/channel_layout.h"
-#include "libavutil/dict_internal.h"
 #include "libavutil/internal.h"
 #include "libavutil/intreadwrite.h"
 #include "libavutil/intfloat.h"
@@ -1858,7 +1857,7 @@ static void mov_metadata_creation_time(MOVContext *c, AVIOContext *pb, AVDiction
             return;
         }
 
-        avpriv_dict_set_timestamp(metadata, "creation_time", time * 1000000);
+        ff_dict_set_timestamp(metadata, "creation_time", time * 1000000);
     }
 }
 
@@ -3539,7 +3538,7 @@ static int mov_read_stts(MOVContext *c, AVIOContext *pb, MOVAtom atom)
             av_log(c->fc, AV_LOG_WARNING, "Too large sample offset %u in stts entry %u with count %u in st:%d. Clipping to 1.\n",
                    sample_duration, i, sample_count, st->index);
             sc->stts_data[i].duration = 1;
-            corrected_dts += (delta_magnitude < 0 ? (int64_t)delta_magnitude : 1) * sample_count;
+            corrected_dts = av_sat_add64(corrected_dts, (delta_magnitude < 0 ? (int64_t)delta_magnitude : 1) * sample_count);
         } else {
             corrected_dts += sample_duration * (uint64_t)sample_count;
         }
@@ -4476,7 +4475,7 @@ static void mov_fix_index(MOVContext *mov, AVStream *st)
 static uint32_t get_sgpd_sync_index(const MOVStreamContext *sc, int nal_unit_type)
 {
     for (uint32_t i = 0; i < sc->sgpd_sync_count; i++)
-        if (sc->sgpd_sync[i] == HEVC_NAL_CRA_NUT)
+        if (sc->sgpd_sync[i] == nal_unit_type)
             return i + 1;
     return 0;
 }
