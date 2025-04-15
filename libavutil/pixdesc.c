@@ -2182,8 +2182,8 @@ static const AVPixFmtDescriptor av_pix_fmt_descriptors[AV_PIX_FMT_NB] = {
         .name = "cuda",
         .flags = AV_PIX_FMT_FLAG_HWACCEL,
     },
-    [AV_PIX_FMT_ROCDECODE] = {
-        .name = "rocdecode",
+    [AV_PIX_FMT_AMD_GPU] = {
+        .name = "amd_gpu",
         .flags = AV_PIX_FMT_FLAG_HWACCEL,
     },
     [AV_PIX_FMT_AMF_SURFACE] = {

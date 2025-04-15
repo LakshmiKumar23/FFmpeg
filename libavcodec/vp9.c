@@ -1870,8 +1870,8 @@ const FFCodec ff_vp9_decoder = {
 #if CONFIG_VP9_NVDEC_HWACCEL
                                HWACCEL_NVDEC(vp9),
 #endif
-/*#if CONFIG_VP9_ROCDECODE_HWACCEL
-                               HWACCEL_ROCDECODE(vp9),
+/*#if CONFIG_VP9_AMD_GPU_HWACCEL
+                               HWACCEL_AMD_GPU(vp9),
 #endif
 */
 #if CONFIG_VP9_VAAPI_HWACCEL

@@ -70,7 +70,7 @@ static const HWContextType * const hw_table[] = {
     &ff_hwcontext_type_amf,
 #endif
 #if CONFIG_AMD_GPU
-    &ff_hwcontext_type_rocdecode,
+    &ff_hwcontext_type_amd_gpu,
 #endif
     NULL,
 };
@@ -89,7 +89,7 @@ static const char *const hw_type_names[] = {
     [AV_HWDEVICE_TYPE_MEDIACODEC] = "mediacodec",
     [AV_HWDEVICE_TYPE_VULKAN] = "vulkan",
     [AV_HWDEVICE_TYPE_AMF] = "amf",
-    [AV_HWDEVICE_TYPE_ROCDECODE] = "rocdecode",
+    [AV_HWDEVICE_TYPE_AMD_GPU] = "amd_gpu",
 };
 
 typedef struct FFHWDeviceContext {

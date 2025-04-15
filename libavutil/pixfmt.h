@@ -263,7 +263,7 @@ enum AVPixelFormat {
      * HW acceleration through rocDecode. data[i] contain hip device pointers
      * exactly as for system memory frames.
      */
-    AV_PIX_FMT_ROCDECODE,
+    AV_PIX_FMT_AMD_GPU,
 
     AV_PIX_FMT_0RGB,        ///< packed RGB 8:8:8, 32bpp, XRGBXRGB...   X=unused/undefined
     AV_PIX_FMT_RGB0,        ///< packed RGB 8:8:8, 32bpp, RGBXRGBX...   X=unused/undefined

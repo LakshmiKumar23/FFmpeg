@@ -1615,8 +1615,8 @@ const FFCodec ff_av1_decoder = {
 #if CONFIG_AV1_NVDEC_HWACCEL
         HWACCEL_NVDEC(av1),
 #endif
-/*#if CONFIG_AV1_ROCDECODE_HWACCEL
-        HWACCEL_ROCDECODE(av1),
+/*#if CONFIG_AV1_AMD_GPU_HWACCEL
+        HWACCEL_AMD_GPU(av1),
 #endif
 */
 #if CONFIG_AV1_VAAPI_HWACCEL

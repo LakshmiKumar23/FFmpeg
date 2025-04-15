@@ -37,7 +37,7 @@
 
 #include "rocdecode_plugin.h"
 #include "libavutil/rocdecode_check.h"
-#include "libavutil/hwcontext_rocdecode.h"
+//#include "libavutil/hwcontext_rocdecode.h"
 
 #define CHECK_ROCDECODE(x) FF_ROCDECODE_CHECK(x)
 
@@ -148,12 +148,11 @@ static int rocdec_decoder_create(RocDecDecoder **out, AVBufferRef *hw_device_ref
                                 RocDecoderCreateInfo *params, void *logctx)
 {
     AVHWDeviceContext  *hw_device_ctx = (AVHWDeviceContext*)hw_device_ref->data;
-    AVRocDecodeDeviceContext *device_hwctx = hw_device_ctx->hwctx;
+    //AVRocDecodeDeviceContext *device_hwctx = hw_device_ctx->hwctx;
 
     RocDecDecoder *decoder;
 
     int ret;
-
     decoder = av_refstruct_alloc_ext(sizeof(*decoder), 0,
                                      NULL, rocdec_decoder_free);
     if (!decoder)
@@ -164,7 +163,7 @@ static int rocdec_decoder_create(RocDecDecoder **out, AVBufferRef *hw_device_ref
         av_refstruct_unref(&decoder);
         return AVERROR(ENOMEM);
     }
-    decoder->stream = device_hwctx->stream;
+    //decoder->stream = device_hwctx->stream;
 
     ret = rocdec_test_capabilities(decoder, params, logctx);
     if (ret < 0) {
@@ -179,7 +178,7 @@ static int rocdec_decoder_create(RocDecDecoder **out, AVBufferRef *hw_device_ref
     }
 
     *out = decoder;
-
+    av_log(logctx, AV_LOG_VERBOSE, "rocdec_decoder_create: rocDecCreateDecoder() successful!\n");
     return 0;
 }
 
@@ -201,7 +200,7 @@ static void rocdec_decoder_frame_pool_free(AVRefStructOpaque opaque)
     av_free(opaque.nc);
 }
 
-int ff_rocdec_decode_uninit(AVCodecContext *avctx)
+int ff_amd_gpu_decode_uninit(AVCodecContext *avctx)
 {
     RocDecContext *ctx = avctx->internal->hwaccel_priv_data;
 
@@ -234,7 +233,7 @@ static int rocdec_init_hwframes(AVCodecContext *avctx, AVBufferRef **out_frames_
 {
     AVHWFramesContext *frames_ctx;
     int ret;
-
+    av_log(avctx, AV_LOG_VERBOSE, "rocdec_init_hwframes start..\n");
     ret = avcodec_get_hw_frames_parameters(avctx,
                                            avctx->hw_device_ctx,
                                            avctx->hwaccel->pix_fmt,
@@ -269,7 +268,7 @@ static int rocdec_init_hwframes(AVCodecContext *avctx, AVBufferRef **out_frames_
     return 0;
 }
 
-int ff_rocdec_decode_init(AVCodecContext *avctx)
+int ff_amd_gpu_decode_init(AVCodecContext *avctx)
 {
     RocDecContext *ctx = avctx->internal->hwaccel_priv_data;
 
@@ -296,12 +295,14 @@ int ff_rocdec_decode_init(AVCodecContext *avctx)
         av_log(avctx, AV_LOG_ERROR, "Unsupported codec ID\n");
         return AVERROR_BUG;
     }
+    av_log(avctx, AV_LOG_VERBOSE, "rocdec codec ID -- %d\n", rocddec_codec_type);
 
     rocddec_chroma_format = map_chroma_format(avctx->sw_pix_fmt);
     if (rocddec_chroma_format < 0) {
         av_log(avctx, AV_LOG_ERROR, "Unsupported chroma format\n");
         return AVERROR(ENOSYS);
     }
+    av_log(avctx, AV_LOG_VERBOSE, "rocdec chroma format -- %d\n", rocddec_chroma_format);
     chroma_444 = ctx->supports_444 && rocddec_chroma_format == rocDecVideoSurfaceFormat_YUV444;
 
     if (!avctx->hw_frames_ctx) {
@@ -373,7 +374,7 @@ int ff_rocdec_decode_init(AVCodecContext *avctx)
 
     pool = av_mallocz(sizeof(*pool));
     if (!pool) {
-        ff_rocdec_decode_uninit(avctx);
+        ff_amd_gpu_decode_uninit(avctx);
         return AVERROR(ENOMEM);;
     }
     pool->dpb_size = frames_ctx->initial_pool_size;
@@ -382,7 +383,7 @@ int ff_rocdec_decode_init(AVCodecContext *avctx)
                                                     rocdec_decoder_frame_init,
                                                     NULL, NULL, rocdec_decoder_frame_pool_free);
     if (!ctx->decoder_pool) {
-        ff_rocdec_decode_uninit(avctx);
+        ff_amd_gpu_decode_uninit(avctx);
         return AVERROR(ENOMEM);
     }
 
@@ -420,7 +421,7 @@ static void rocdec_unmap_mapped_frame(void *opaque, uint8_t *data)
 
 static int rocdec_retrieve_data(void *logctx, AVFrame *frame)
 {
-    FrameDecodeData  *fdd = (FrameDecodeData*)frame->private_ref->data;
+    FrameDecodeData  *fdd = (FrameDecodeData*)frame->private_ref;
     RocDecFrame        *cf = (RocDecFrame*)fdd->hwaccel_priv;
     RocDecDecoder *decoder = cf->decoder;
 
@@ -438,6 +439,7 @@ static int rocdec_retrieve_data(void *logctx, AVFrame *frame)
     int ret = 0;
 
     vpp.progressive_frame = 1;
+    av_log(logctx, AV_LOG_VERBOSE, "rocdec_retrieve_data: rocDecGetVideoFrame start..\n");
 
     // TODO: Check how to map frames? GetFrame?
     ret = CHECK_ROCDECODE(rocDecGetVideoFrame(decoder->decoder,
@@ -449,6 +451,8 @@ static int rocdec_retrieve_data(void *logctx, AVFrame *frame)
 
         return av_frame_make_writable(frame);
     }
+
+    av_log(logctx, AV_LOG_VERBOSE, "rocdec_retrieve_data: rocDecGetVideoFrame complete..\n");
 
     unmap_data = av_mallocz(sizeof(*unmap_data));
     if (!unmap_data) {
@@ -501,13 +505,15 @@ static int rocdec_retrieve_data(void *logctx, AVFrame *frame)
     if (decoder->unsafe_output)
         return ret;
 
+    av_log(logctx, AV_LOG_VERBOSE, "rocdec_retrieve_data complete..\n");
+
     return av_frame_make_writable(frame);
 }
 
-int ff_rocdec_start_frame(AVCodecContext *avctx, AVFrame *frame)
+int ff_amd_gpu_start_frame(AVCodecContext *avctx, AVFrame *frame)
 {
     RocDecContext *ctx = avctx->internal->hwaccel_priv_data;
-    FrameDecodeData *fdd = (FrameDecodeData*)frame->private_ref->data;
+    FrameDecodeData *fdd = (FrameDecodeData*)frame->private_ref;
     RocDecFrame *cf = NULL;
     int ret;
 
@@ -535,19 +541,19 @@ int ff_rocdec_start_frame(AVCodecContext *avctx, AVFrame *frame)
     fdd->hwaccel_priv      = cf;
     fdd->hwaccel_priv_free = rocdec_fdd_priv_free;
     fdd->post_process      = rocdec_retrieve_data;
-
+    av_log(avctx, AV_LOG_VERBOSE, "ff_amd_gpu_start_frame complete..\n");
     return 0;
 
 }
 
-int ff_rocdec_start_frame_sep_ref(AVCodecContext *avctx, AVFrame *frame, int has_sep_ref)
+int ff_amd_gpu_start_frame_sep_ref(AVCodecContext *avctx, AVFrame *frame, int has_sep_ref)
 {
     RocDecContext *ctx = avctx->internal->hwaccel_priv_data;
-    FrameDecodeData *fdd = (FrameDecodeData*)frame->private_ref->data;
+    FrameDecodeData *fdd = (FrameDecodeData*)frame->private_ref;
     RocDecFrame *cf;
     int ret;
 
-    ret = ff_rocdec_start_frame(avctx, frame);
+    ret = ff_amd_gpu_start_frame(avctx, frame);
     if (ret < 0)
         return ret;
 
@@ -572,7 +578,7 @@ int ff_rocdec_start_frame_sep_ref(AVCodecContext *avctx, AVFrame *frame, int has
     return 0;
 }
 
-int ff_rocdec_end_frame(AVCodecContext *avctx)
+int ff_amd_gpu_end_frame(AVCodecContext *avctx)
 {
     RocDecContext     *ctx = avctx->internal->hwaccel_priv_data;
     RocDecDecoder *decoder = ctx->decoder;
@@ -585,23 +591,25 @@ int ff_rocdec_end_frame(AVCodecContext *avctx)
     pp->num_slices        = ctx->nb_slices;
     // TODO: Found only in particular codec picParams; do I check codec and call based on that?
     //pp->slice_data_offset = ctx->slice_offsets;
+    av_log(avctx, AV_LOG_VERBOSE, "ff_amd_gpu_end_frame: rocDecDecodeFrame start..\n");
 
     ret = CHECK_ROCDECODE(rocDecDecodeFrame(decoder->decoder, &ctx->pic_params));
+    av_log(avctx, AV_LOG_VERBOSE, "ff_amd_gpu_end_frame: rocDecDecodeFrame complete..\n");
 
     return ret;
 }
 
-int ff_rocdec_simple_end_frame(AVCodecContext *avctx)
+int ff_amd_gpu_simple_end_frame(AVCodecContext *avctx)
 {
     RocDecContext *ctx = avctx->internal->hwaccel_priv_data;
-    int ret = ff_rocdec_end_frame(avctx);
+    int ret = ff_amd_gpu_end_frame(avctx);
     ctx->bitstream = NULL;
     ctx->bitstream_len = 0;
     ctx->nb_slices = 0;
     return ret;
 }
 
-int ff_rocdec_simple_decode_slice(AVCodecContext *avctx, const uint8_t *buffer,
+int ff_amd_gpu_simple_decode_slice(AVCodecContext *avctx, const uint8_t *buffer,
                                  uint32_t size)
 {
     RocDecContext *ctx = avctx->internal->hwaccel_priv_data;
@@ -623,7 +631,7 @@ int ff_rocdec_simple_decode_slice(AVCodecContext *avctx, const uint8_t *buffer,
     return 0;
 }
 
-int ff_rocdec_frame_params(AVCodecContext *avctx,
+int ff_amd_gpu_frame_params(AVCodecContext *avctx,
                           AVBufferRef *hw_frames_ctx,
                           int dpb_size,
                           int supports_444)
@@ -649,7 +657,7 @@ int ff_rocdec_frame_params(AVCodecContext *avctx,
     }
     chroma_444 = supports_444 && rocddec_chroma_format == rocDecVideoChromaFormat_444;
 
-    frames_ctx->format            = AV_PIX_FMT_CUDA;
+    frames_ctx->format            = AV_PIX_FMT_AMD_GPU;
     frames_ctx->width             = (avctx->coded_width + 1) & ~1;
     frames_ctx->height            = (avctx->coded_height + 1) & ~1;
     /*
@@ -681,7 +689,7 @@ int ff_rocdec_frame_params(AVCodecContext *avctx,
     return 0;
 }
 
-int ff_rocdec_get_ref_idx(AVFrame *frame)
+int ff_amd_gpu_get_ref_idx(AVFrame *frame)
 {
     FrameDecodeData *fdd;
     RocDecFrame *cf;
@@ -689,7 +697,7 @@ int ff_rocdec_get_ref_idx(AVFrame *frame)
     if (!frame || !frame->private_ref)
         return -1;
 
-    fdd = (FrameDecodeData*)frame->private_ref->data;
+    fdd = (FrameDecodeData*)frame->private_ref;
     cf  = (RocDecFrame*)fdd->hwaccel_priv;
     if (!cf)
         return -1;

@@ -74,7 +74,7 @@ static int rocdecode_frames_get_constraints(AVHWDeviceContext *ctx,
     if (!constraints->valid_hw_formats)
         return AVERROR(ENOMEM);
 
-    constraints->valid_hw_formats[0] = AV_PIX_FMT_ROCDECODE;
+    constraints->valid_hw_formats[0] = AV_PIX_FMT_AMD_GPU;
     constraints->valid_hw_formats[1] = AV_PIX_FMT_NONE;
 
     return 0;
@@ -127,7 +127,7 @@ static int rocdecode_frames_init(AVHWFramesContext *ctx)
     if (err < 0)
         return err;
 
-    av_log(ctx, AV_LOG_DEBUG, "CUDA texture alignment: %d\n", priv->tex_alignment);
+    av_log(ctx, AV_LOG_DEBUG, "HIP texture alignment: %d\n", priv->tex_alignment);
 
     av_pix_fmt_get_chroma_sub_sample(ctx->sw_format, &priv->shift_width, &priv->shift_height);
 
@@ -202,8 +202,8 @@ static int rocdecode_transfer_data(AVHWFramesContext *ctx, AVFrame *dst,
 
     int i, ret;
 
-    if ((src->hw_frames_ctx && ((AVHWFramesContext*)src->hw_frames_ctx->data)->format != AV_PIX_FMT_ROCDECODE) ||
-        (dst->hw_frames_ctx && ((AVHWFramesContext*)dst->hw_frames_ctx->data)->format != AV_PIX_FMT_ROCDECODE))
+    if ((src->hw_frames_ctx && ((AVHWFramesContext*)src->hw_frames_ctx->data)->format != AV_PIX_FMT_AMD_GPU) ||
+        (dst->hw_frames_ctx && ((AVHWFramesContext*)dst->hw_frames_ctx->data)->format != AV_PIX_FMT_AMD_GPU))
         return AVERROR(ENOSYS);
 
     for (i = 0; i < FF_ARRAY_ELEMS(src->data) && src->data[i]; i++) {
@@ -253,25 +253,20 @@ static void rocdecode_device_uninit(AVHWDeviceContext *device_ctx)
         memset(&hwctx->p, 0, sizeof(hwctx->p));
         hwctx->p.internal = NULL;
     }
+    av_log(hwctx, AV_LOG_VERBOSE, "rocdecode_device_uninit: Uninitialize device successful\n");
 }
 
 static int rocdecode_device_init(AVHWDeviceContext *ctx)
 {
     RocDecodeDeviceContext *hwctx = ctx->hwctx;
-    int ret;
 
-    av_log(ctx, AV_LOG_ERROR, "Trying to initialize device\n");
     hwctx->p.internal = &hwctx->internal;
 
     if (!hwctx) {
-        //TODO: What device to load?
-        //ret = cuda_load_functions(&hwctx->internal.cuda_dl, ctx);
-        if (ret < 0) {
-            //av_log(ctx, AV_LOG_ERROR, "Could not dynamically load CUDA\n");
-            return ret;
-        }
+        av_log(ctx, AV_LOG_ERROR, "rocdecode_device_init: Could not initialize device\n");
+        return -1;
     }
-
+    av_log(ctx, AV_LOG_VERBOSE, "rocdecode_device_init: Initialize device successful\n");
     return 0;
 }
 
@@ -291,7 +286,7 @@ static int rocdecode_device_create(AVHWDeviceContext *device_ctx,
         return ret;
     }
 
-    ret = CHECK_HIP_CALL(hipInit(0));
+    ret = CHECK_HIP_CALL(hipInit(device_idx));
     if (ret < 0) {
         rocdecode_device_uninit(device_ctx);
         return ret;
@@ -302,7 +297,7 @@ static int rocdecode_device_create(AVHWDeviceContext *device_ctx,
         rocdecode_device_uninit(device_ctx);
         return ret;
     }
-
+    av_log(hwctx, AV_LOG_VERBOSE, "rocdecode_device_create: Created device on %d\n", device_idx);
     return 0;
 }
 
@@ -319,7 +314,7 @@ static int rocdecode_device_derive(AVHWDeviceContext *device_ctx,
         return ret;
     }
 
-    ret = CHECK_HIP_CALL(hipInit(0));
+    ret = CHECK_HIP_CALL(hipInit(hwctx->internal->device));
     if (ret < 0) {
         rocdecode_device_uninit(device_ctx);
         return ret;
@@ -355,16 +350,16 @@ static int rocdecode_device_derive(AVHWDeviceContext *device_ctx,
     }
 
     if (hwctx->internal->device == -1) {
-        av_log(device_ctx, AV_LOG_ERROR, "Could not derive CUDA device.\n");
+        av_log(device_ctx, AV_LOG_ERROR, "Could not derive HIP device.\n");
         rocdecode_device_uninit(device_ctx);
         return -1;
     }
-
+    av_log(hwctx, AV_LOG_VERBOSE, "rocdecode_device_derive: Derived device on %s\n", src_uuid);
     return 0;
 }
 
-const HWContextType ff_hwcontext_type_rocdecode = {
-    .type                   = AV_HWDEVICE_TYPE_ROCDECODE,
+const HWContextType ff_hwcontext_type_amd_gpu = {
+    .type                   = AV_HWDEVICE_TYPE_AMD_GPU,
     .name                   = "ROCDECODE",
 
     .device_hwctx_size      = sizeof(RocDecodeDeviceContext),
@@ -381,5 +376,5 @@ const HWContextType ff_hwcontext_type_rocdecode = {
     .transfer_data_to       = rocdecode_transfer_data,
     .transfer_data_from     = rocdecode_transfer_data,
 
-    .pix_fmts               = (const enum AVPixelFormat[]){ AV_PIX_FMT_ROCDECODE, AV_PIX_FMT_NONE },
+    .pix_fmts               = (const enum AVPixelFormat[]){ AV_PIX_FMT_AMD_GPU, AV_PIX_FMT_NONE },
 };

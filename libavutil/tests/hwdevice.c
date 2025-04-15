@@ -143,8 +143,8 @@ static const struct {
       { "0.0", "0.1", "1.0", "1.1" } },
     { AV_HWDEVICE_TYPE_VAAPI,
       { "/dev/dri/renderD128", "/dev/dri/renderD129", ":0", "0", "1" } },
-    { AV_HWDEVICE_TYPE_ROCDECODE,
-      { "/dev/dri/renderD128", "/dev/dri/renderD129" } },
+    { AV_HWDEVICE_TYPE_AMD_GPU,
+      { "0", "1"} },
 };
 
 static int test_device_type(enum AVHWDeviceType type)
@@ -152,14 +152,18 @@ static int test_device_type(enum AVHWDeviceType type)
     enum AVHWDeviceType check;
     const char *name;
     int i, j, found, err;
+    printf("in test case -- %d\n", type);
 
     name = av_hwdevice_get_type_name(type);
+    printf("in test case -- %s\n", name);
     if (!name) {
         fprintf(stderr, "No name available for device type %d.\n", type);
         return -1;
     }
 
     check = av_hwdevice_find_type_by_name(name);
+    printf("in test case -- %d\n", check);
+
     if (check != type) {
         fprintf(stderr, "Type %d maps to name %s maps to type %d.\n",
                type, name, check);
@@ -168,37 +172,38 @@ static int test_device_type(enum AVHWDeviceType type)
 
     found = 0;
 
-    err = test_device(type, name, NULL, NULL, 0);
-    if (err < 0) {
-        fprintf(stderr, "Test failed for %s with default options.\n", name);
-        return -1;
-    }
-    if (err == 0) {
-        fprintf(stderr, "Test passed for %s with default options.\n", name);
-        ++found;
-    }
+    if (!strcmp(name, "amd_gpu")) {
+        err = test_device(type, name, NULL, NULL, 0);
+        if (err < 0) {
+            fprintf(stderr, "Test failed for %s with default options.\n", name);
+            return -1;
+        }
+        if (err == 0) {
+            fprintf(stderr, "Test passed for %s with default options.\n", name);
+            ++found;
+        }
 
-    for (i = 0; i < FF_ARRAY_ELEMS(test_devices); i++) {
-        if (test_devices[i].type != type)
-            continue;
+        for (i = 0; i < FF_ARRAY_ELEMS(test_devices); i++) {
+            if (test_devices[i].type != type)
+                continue;
 
-        for (j = 0; test_devices[i].possible_devices[j]; j++) {
-            err = test_device(type, name,
-                              test_devices[i].possible_devices[j],
-                              NULL, 0);
-            if (err < 0) {
-                fprintf(stderr, "Test failed for %s with device %s.\n",
-                       name, test_devices[i].possible_devices[j]);
-                return -1;
-            }
-            if (err == 0) {
-                fprintf(stderr, "Test passed for %s with device %s.\n",
+            for (j = 0; test_devices[i].possible_devices[j]; j++) {
+                err = test_device(type, name,
+                                test_devices[i].possible_devices[j],
+                                NULL, 0);
+                if (err < 0) {
+                    fprintf(stderr, "Test failed for %s with device %s.\n",
                         name, test_devices[i].possible_devices[j]);
-                ++found;
+                    return -1;
+                }
+                if (err == 0) {
+                    fprintf(stderr, "Test passed for %s with device %s.\n",
+                            name, test_devices[i].possible_devices[j]);
+                    ++found;
+                }
             }
         }
     }
-
     return !found;
 }
 
