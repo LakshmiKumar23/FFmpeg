@@ -3059,7 +3059,7 @@ static int decode_slice_data(HEVCContext *s, const HEVCLayerContext *l,
     }
 
     s->slice_initialized = 1;
-
+    printf("debug -- hevcdec.c -- nal->raw_size before decode_slice call -- %d\n", nal->raw_size);
     if (s->avctx->hwaccel)
         return FF_HW_CALL(s->avctx, decode_slice, nal->raw_data, nal->raw_size);
 

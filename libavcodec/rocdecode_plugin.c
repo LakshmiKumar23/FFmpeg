@@ -421,6 +421,7 @@ static void rocdec_unmap_mapped_frame(void *opaque, uint8_t *data)
 
 static int rocdec_retrieve_data(void *logctx, AVFrame *frame)
 {
+    return 0;
     FrameDecodeData  *fdd = (FrameDecodeData*)frame->private_ref;
     RocDecFrame        *cf = (RocDecFrame*)fdd->hwaccel_priv;
     RocDecDecoder *decoder = cf->decoder;
@@ -431,7 +432,7 @@ static int rocdec_retrieve_data(void *logctx, AVFrame *frame)
     RocDecFrame *unmap_data = NULL;
 
     // TODO: check for device ptr
-    void* devptr[3] = { 0 };;
+    void* devptr[3] = { 0 };
 
     uint32_t pitch;
     unsigned int offset = 0;
@@ -589,8 +590,16 @@ int ff_amd_gpu_end_frame(AVCodecContext *avctx)
     pp->bitstream_data_len = ctx->bitstream_len;
     pp->bitstream_data    = ctx->bitstream;
     pp->num_slices        = ctx->nb_slices;
-    // TODO: Found only in particular codec picParams; do I check codec and call based on that?
-    //pp->slice_data_offset = ctx->slice_offsets;
+
+    switch (avctx->codec_id) {
+        case AV_CODEC_ID_HEVC:
+            pp->slice_params.hevc->slice_data_offset = ctx->slice_offsets;
+            break;
+        default:
+            av_log(avctx, AV_LOG_ERROR, "ff_amd_gpu_end_frame: AVCodecID (%d) not supported!\n", avctx->codec_id);
+    }
+    
+
     av_log(avctx, AV_LOG_VERBOSE, "ff_amd_gpu_end_frame: rocDecDecodeFrame start..\n");
 
     ret = CHECK_ROCDECODE(rocDecDecodeFrame(decoder->decoder, &ctx->pic_params));
