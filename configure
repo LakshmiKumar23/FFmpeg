@@ -344,6 +344,7 @@ External library support:
   --enable-cuda-nvcc       enable Nvidia CUDA compiler [no]
   --disable-cuda-llvm      disable CUDA compilation using clang [autodetect]
   --disable-cuvid          disable Nvidia CUVID support [autodetect]
+  --disable-rocdec         disable AMD rocdecode support [autodetect]
   --disable-d3d11va        disable Microsoft Direct3D 11 video acceleration code [autodetect]
   --disable-d3d12va        disable Microsoft Direct3D 12 video acceleration code [autodetect]
   --disable-dxva2          disable Microsoft DirectX 9 video acceleration code [autodetect]
@@ -358,7 +359,7 @@ External library support:
   --enable-omx             enable OpenMAX IL code [no]
   --enable-omx-rpi         enable OpenMAX IL code for Raspberry Pi [no]
   --enable-rkmpp           enable Rockchip Media Process Platform code [no]
-  --disable-amd_gpu      disable AMD's ROCm video decoding code
+  --disable-amd_gpu        disable AMD's ROCm video decoding code
   --disable-v4l2-m2m       disable V4L2 mem2mem code [autodetect]
   --disable-vaapi          disable Video Acceleration API (mainly Unix/Intel) code [autodetect]
   --disable-vdpau          disable Nvidia Video Decode and Presentation API for Unix code [autodetect]
@@ -2007,6 +2008,7 @@ HWACCEL_AUTODETECT_LIBRARY_LIST="
     nvdec
     nvenc
     amd_gpu
+    rocdec
     vaapi
     vdpau
     videotoolbox
@@ -7336,9 +7338,9 @@ if enabled uwp; then
     mediafoundation_extralibs="-lmfplat $mediafoundation_extralibs"
 fi
 
-enabled amd_gpu && add_cppflags '-I/opt/rocm/include/' && add_cppflags '-I/opt/rocm/share/' \
+enabled_any rocdec amd_gpu && add_cppflags '-I/opt/rocm/include/' && add_cppflags '-I/opt/rocm/share/' \
         && add_cppflags '-D__HIP_PLATFORM_AMD__' && add_cxxflags '-std=c++17' && add_extralibs '/opt/rocm/lib/librocdecode.so'
-enabled amd_gpu && check_headers rocdecode/rocdecode.h
+enabled_any rocdec amd_gpu && check_headers rocdecode/rocdecode.h
 
 enabled libdrm &&
     check_pkg_config libdrm_getfb2 libdrm "xf86drmMode.h" drmModeGetFB2
@@ -7472,7 +7474,7 @@ enabled amf &&
 #        freebsd|mingw32*|mingw64*|win32|win64|cygwin*)
 #            ;;
 #        *)
-#            disable amd_gpu
+#            disable amd_gpu rocdec
 #            ;;
 #    esac
 #elif enabled_any aarch64 ppc64 && ! enabled bigendian; then
@@ -7480,14 +7482,16 @@ enabled amf &&
 #        linux)
 #            ;;
 #        *)
-#            disable amd_gpu
+#            disable amd_gpu rocdec
 #            ;;
 #    esac
 #else
-#    disable amd_gpu
+#    disable amd_gpu rocdec
 #fi
 
-if enabled amd_gpu; then
+if enabled_any amd_gpu rocdec; then
+    check_cpp_condition rocdec "rocdecode/rocdecode_version.h" \
+        "(ROCDECODE_CHECK_VERSION(0,6,0))"
     check_cpp_condition amd_gpu "rocdecode/rocdecode_version.h" \
         "(ROCDECODE_CHECK_VERSION(0,6,0))"
 fi

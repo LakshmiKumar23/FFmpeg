@@ -22,7 +22,9 @@
 #include "error.h"
 #include "libavutil/log.h"
 #include <hip/hip_runtime.h>
+#include <hip/hip_runtime_api.h>
 #include "rocdecode/rocdecode.h"
+#include "rocdecode/rocparser.h"
 
 typedef hipError_t hip_check_GetErrorName(hipError_t error, const char** pstr);
 typedef hipError_t hip_check_GetErrorString(hipError_t error, const char** pstr);
@@ -54,7 +56,7 @@ static inline int ff_hip_check(void *avctx, void *hipGetErrorName_fn, void *hipG
 /**
  * Wrap a rocDecode function call and print error information if it fails.
  */
-static inline int ff_amd_gpuode_check(void *rocDecGetErrorName_fn, rocDecStatus err, const char *func) {
+static inline int ff_rocdecode_check(void *rocDecGetErrorName_fn, rocDecStatus err, const char *func) {
 
     void *avctx = NULL;
     const char *err_name = NULL;
@@ -74,6 +76,6 @@ static inline int ff_amd_gpuode_check(void *rocDecGetErrorName_fn, rocDecStatus 
 
 
 #define FF_HIP_CHECK(avclass, x) ff_hip_check(avclass, hipGetErrorName, hipGetErrorString, (x), #x)
-#define FF_ROCDECODE_CHECK(x) ff_amd_gpuode_check(rocDecGetErrorName, (x), #x)
+#define FF_ROCDECODE_CHECK(x) ff_rocdecode_check(rocDecGetErrorName, (x), #x)
 
 #endif /* AVUTIL_ROCDECODE_CHECK_H */
