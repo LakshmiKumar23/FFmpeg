@@ -32,6 +32,7 @@
 #include "libavutil/mem.h"
 #include "libavutil/opt.h"
 #include "libavutil/pixdesc.h"
+#include <hip/driver_types.h>
 
 #include "avcodec.h"
 #include "bsf.h"
@@ -53,7 +54,6 @@ typedef struct RocdecContext
 
     char *amd_gpu;
     int nb_surfaces;
-    int drop_second_field;
     char *crop_expr;
     char *resize_expr;
 
@@ -97,8 +97,9 @@ typedef struct RocdecContext
 typedef struct RocdecParsedFrame
 {
     RocdecParserDispInfo dispinfo;
-    int second_field;
+    /*int second_field;
     int is_deinterlacing;
+    */
 } RocdecParsedFrame;
 
 #define CHECK_ROCDECODE(x) FF_ROCDECODE_CHECK(x)
@@ -319,10 +320,10 @@ static int ROCDECAPI rocdec_handle_video_sequence(void *opaque, RocdecVideoForma
     }
 
     // TODO: Check conditions
-    if (/*ctx->deint_mode_current != cudaVideoDeinterlaceMode_Weave &&*/ !ctx->drop_second_field) {
+    /*if (ctx->deint_mode_current != cudaVideoDeinterlaceMode_Weave && !ctx->drop_second_field) {
         avctx->framerate = av_mul_q(avctx->framerate, (AVRational){2, 1});
         fifo_size_mul = 2;
-    }
+    }*/
 
     old_nb_surfaces = ctx->nb_surfaces;
     ctx->nb_surfaces = FFMAX(ctx->nb_surfaces, format->min_num_decode_surfaces + 3);
@@ -345,9 +346,6 @@ static int ROCDECAPI rocdec_handle_video_sequence(void *opaque, RocdecVideoForma
     rocdecinfo.num_decode_surfaces = ctx->nb_surfaces;
     rocdecinfo.num_output_surfaces = 1;
     rocdecinfo.bit_depth_minus_8 = format->bit_depth_luma_minus8;
-    // TODO: CHeck below
-    // rocdecinfo.ulCreationFlags = cudaVideoCreate_PreferCUVID;
-    // rocdecinfo.DeinterlaceMode = ctx->deint_mode_current;
 
     ctx->internal_error = CHECK_ROCDECODE(rocDecCreateDecoder(&ctx->rocdecdecoder, &rocdecinfo));
     if (ctx->internal_error < 0)
@@ -402,18 +400,7 @@ static int ROCDECAPI rocdec_handle_picture_display(void *opaque, RocdecParserDis
     // For some reason, dispinfo->progressive_frame is sometimes wrong.
     parsed_frame.dispinfo.progressive_frame = ctx->progressive_sequence;
 
-    // TODO: Check conditions
-    /*if (ctx->deint_mode_current == cudaVideoDeinterlaceMode_Weave) {
-        av_fifo_write(ctx->frame_queue, &parsed_frame, 1);
-    } else {
-    */
-    parsed_frame.is_deinterlacing = 1;
     av_fifo_write(ctx->frame_queue, &parsed_frame, 1);
-    if (!ctx->drop_second_field) {
-        parsed_frame.second_field = 1;
-        av_fifo_write(ctx->frame_queue, &parsed_frame, 1);
-    }
-    //}
 
     return 1;
 }
@@ -423,9 +410,9 @@ static int rocdec_is_buffer_full(AVCodecContext *avctx)
     RocdecContext *ctx = avctx->priv_data;
 
     int shift = 0;
-    if (/*ctx->deint_mode != cudaVideoDeinterlaceMode_Weave &&*/ !ctx->drop_second_field)
+    /*if (ctx->deint_mode != cudaVideoDeinterlaceMode_Weave && !ctx->drop_second_field)
         shift = 1;
-
+    */
     // shift/divide frame count to ensure the buffer is still signalled full if one half-frame has already been returned when deinterlacing.
     return ((av_fifo_can_read(ctx->frame_queue) + shift) >> shift) + ctx->rocdec_parse_info.max_display_delay >= ctx->nb_surfaces;
 }
@@ -494,7 +481,7 @@ static int rocdec_output_frame(AVCodecContext *avctx, AVFrame *frame)
     RocdecParsedFrame parsed_frame;
     int ret = 0, eret = 0;
 
-    av_log(avctx, AV_LOG_VERBOSE, "rocdec_output_frame\n");
+    av_log(avctx, AV_LOG_VERBOSE, "rocdec_output_frame with pixel format %s\n", av_get_pix_fmt_name(avctx->pix_fmt));
 
     if (ctx->decoder_flushing) {
         ret = rocdec_decode_packet(avctx, NULL);
@@ -527,55 +514,66 @@ static int rocdec_output_frame(AVCodecContext *avctx, AVFrame *frame)
 
         memset(&params, 0, sizeof(params));
         params.progressive_frame = parsed_frame.dispinfo.progressive_frame;
-        // TODO: Check for second field. only in picParams
-        //params.second_field = parsed_frame.second_field;
         params.top_field_first = parsed_frame.dispinfo.top_field_first;
 
-        ret = CHECK_ROCDECODE(rocDecGetVideoFrame(ctx->rocdecdecoder, parsed_frame.dispinfo.picture_index, src_dev_ptr, src_pitch, &params));
-        if (ret < 0)
-            goto error;
+        ret = CHECK_ROCDECODE(rocDecGetVideoFrame(ctx->rocdecdecoder, parsed_frame.dispinfo.picture_index,
+                            src_dev_ptr, src_pitch, &params));
+        if (ret < 0) {
+            av_frame_unref(frame);
+            return ret;
+        }
 
         if (avctx->pix_fmt == AV_PIX_FMT_AMD_GPU) {
             ret = av_hwframe_get_buffer(ctx->hwframe, frame, 0);
             if (ret < 0) {
                 av_log(avctx, AV_LOG_ERROR, "av_hwframe_get_buffer failed\n");
-                goto error;
+                av_frame_unref(frame);
+                return ret;
             }
 
             ret = ff_decode_frame_props(avctx, frame);
             if (ret < 0) {
                 av_log(avctx, AV_LOG_ERROR, "ff_decode_frame_props failed\n");
-                goto error;
+                av_frame_unref(frame);
+                return ret;
             }
 
             pixdesc = av_pix_fmt_desc_get(avctx->sw_pix_fmt);
 
             //int dst_pitch = disp_width_ * byte_per_pixel_;
             uint32_t byte_per_pixel_ = ctx->rocdec_parse_info.ext_video_info->format.bit_depth_luma_minus8 > 0 ? 2 : 1;
-            uint8_t *p_src_ptr_y = (uint8_t *)(src_dev_ptr[0]) + 
-                                (ctx->rocdec_parse_info.ext_video_info->format.display_area.top + ctx->crop.top) * src_pitch[0] + 
-                                (ctx->rocdec_parse_info.ext_video_info->format.display_area.left + ctx->crop.left) * byte_per_pixel_;
-               
+            
+            // TODO: Might not need to add display_rect, since cuvid also directly sends mapped_frame
+            // Use src_pitch[0]
+            // offset = 0; src_device_ptr[0] is luma ; src_device_ptr[1] is chroma in our case, so offset is 0 in both.
+            // first iterator loop gives luma, 2nd gives chroma
+            uint8_t *p_src_ptr_y = (uint8_t *)(src_dev_ptr[0]); // + 
+                                //(ctx->rocdec_parse_info.ext_video_info->format.display_area.top + ctx->crop.top) * src_pitch[0] + 
+                                //(ctx->rocdec_parse_info.ext_video_info->format.display_area.left + ctx->crop.left) * byte_per_pixel_;
+
             for (i = 0; i < pixdesc->nb_components; i++) {
                 int height = avctx->height >> (i ? pixdesc->log2_chroma_h : 0);
-                /*CUDA_MEMCPY2D cpy = {
-                    .srcMemoryType = CU_MEMORYTYPE_DEVICE,
-                    .dstMemoryType = CU_MEMORYTYPE_DEVICE,
-                    .srcDevice     = mapped_frame,
-                    .dstDevice     = (CUdeviceptr)frame->data[i],
-                    .srcPitch      = pitch,
+                /* hip_Memcpy2D cpy = {
+                    .srcMemoryType = hipMemoryTypeDevice,
+                    .dstMemoryType = hipMemoryTypeDevice,
+                    .srcDevice     = src_dev_ptr[i], //or p_src_ptr_y
+                    .dstDevice     = (void *)frame->data[i],
+                    .srcPitch      = src_pitch[i],
                     .dstPitch      = frame->linesize[i],
-                    .srcY          = offset,
-                    .WidthInBytes  = FFMIN(pitch, frame->linesize[i]),
+                    .srcY          = 0,
+                    .WidthInBytes  = FFMIN(src_pitch[i], frame->linesize[i]),
                     .Height        = height,
                 };
-
-                ret = CHECK_CU(ctx->cudl->cuMemcpy2DAsync(&cpy, device_hwctx->stream));
-                if (ret < 0)
-                    goto error;
+                // needs all arguments. Passing hip_Memcpy2D complains about missing args
+                ret = CHECK_HIP(hipMemcpy2DAsync(&cpy, device_hwctx->stream));
                 */
-                ret = CHECK_HIP(hipMemcpy2DAsync(frame->data[i], frame->linesize[i], src_dev_ptr, src_pitch[0], frame->linesize[i], height, hipMemcpyDeviceToDevice, device_hwctx->stream));
-                offset += height;
+                ret = CHECK_HIP(hipMemcpy2DAsync(frame->data[i], frame->linesize[i], src_dev_ptr[i], src_pitch[i], 
+                                FFMIN(src_pitch[i], frame->linesize[i]), height, hipMemcpyDeviceToDevice, device_hwctx->stream));
+                if (ret < 0) {
+                    av_frame_unref(frame);
+                    return ret;
+                }
+                // no need - offset += height;
             }
         } else if (avctx->pix_fmt == AV_PIX_FMT_NV12      ||
                    avctx->pix_fmt == AV_PIX_FMT_P010      ||
@@ -587,7 +585,8 @@ static int rocdec_output_frame(AVCodecContext *avctx, AVFrame *frame)
             if (!tmp_frame) {
                 av_log(avctx, AV_LOG_ERROR, "av_frame_alloc failed\n");
                 ret = AVERROR(ENOMEM);
-                goto error;
+                av_frame_unref(frame);
+                return ret;
             }
 
             pixdesc = av_pix_fmt_desc_get(avctx->sw_pix_fmt);
@@ -597,7 +596,8 @@ static int rocdec_output_frame(AVCodecContext *avctx, AVFrame *frame)
             if (!tmp_frame->hw_frames_ctx) {
                 ret = AVERROR(ENOMEM);
                 av_frame_free(&tmp_frame);
-                goto error;
+                av_frame_unref(frame);
+                return ret;
             }
 
             tmp_frame->width         = avctx->width;
@@ -609,28 +609,32 @@ static int rocdec_output_frame(AVCodecContext *avctx, AVFrame *frame)
              * planes.
              */
             for (i = 0; i < pixdesc->nb_components; i++) {
-                tmp_frame->data[i]     = (uint8_t*)src_dev_ptr+ offset;
-                tmp_frame->linesize[i] = src_pitch;
-                offset += src_pitch[0] * (avctx->height >> (i ? pixdesc->log2_chroma_h : 0));
+                tmp_frame->data[i]     = (uint8_t*)src_dev_ptr[i]; //+ offset;
+                tmp_frame->linesize[i] = src_pitch[i];
+                int height = avctx->height >> (i ? pixdesc->log2_chroma_h : 0);
+                //offset += src_pitch[0] * (avctx->height >> (i ? pixdesc->log2_chroma_h : 0));
             }
 
             ret = ff_get_buffer(avctx, frame, 0);
             if (ret < 0) {
                 av_log(avctx, AV_LOG_ERROR, "ff_get_buffer failed\n");
                 av_frame_free(&tmp_frame);
-                goto error;
+                av_frame_unref(frame);
+                return ret;
             }
 
             ret = av_hwframe_transfer_data(frame, tmp_frame, 0);
             if (ret) {
                 av_log(avctx, AV_LOG_ERROR, "av_hwframe_transfer_data failed\n");
                 av_frame_free(&tmp_frame);
-                goto error;
+                av_frame_unref(frame);
+                return ret;
             }
             av_frame_free(&tmp_frame);
         } else {
             ret = AVERROR_BUG;
-            goto error;
+            av_frame_unref(frame);
+            return ret;
         }
 
         if (ctx->key_frame[parsed_frame.dispinfo.picture_index])
@@ -646,23 +650,12 @@ static int rocdec_output_frame(AVCodecContext *avctx, AVFrame *frame)
         else
             frame->pts = parsed_frame.dispinfo.pts;
 
-        if (parsed_frame.second_field) {
-            if (ctx->prev_pts == INT64_MIN) {
-                ctx->prev_pts = frame->pts;
-                frame->pts += (avctx->pkt_timebase.den * avctx->framerate.den) / (avctx->pkt_timebase.num * avctx->framerate.num);
-            } else {
-                int pts_diff = (frame->pts - ctx->prev_pts) / 2;
-                ctx->prev_pts = frame->pts;
-                frame->pts += pts_diff;
-            }
-        }
-
         /* CUVIDs opaque reordering breaks the internal pkt logic.
          * So set pkt_pts and clear all the other pkt_ fields.
          */
         frame->duration = 0;
 
-        if (!parsed_frame.is_deinterlacing && !parsed_frame.dispinfo.progressive_frame)
+        if (!parsed_frame.dispinfo.progressive_frame)
             frame->flags |= AV_FRAME_FLAG_INTERLACED;
 
         if ((frame->flags & AV_FRAME_FLAG_INTERLACED) && parsed_frame.dispinfo.top_field_first)
@@ -672,11 +665,6 @@ static int rocdec_output_frame(AVCodecContext *avctx, AVFrame *frame)
     } else {
         ret = AVERROR(EAGAIN);
     }
-
-error:
-    if (ret < 0)
-        av_frame_unref(frame);
-
     return ret;
 }
 
@@ -945,12 +933,13 @@ static av_cold int rocdec_decode_init(AVCodecContext *avctx)
     }
 
     // Debug
-    FILE *fptr;
+    /*FILE *fptr;
     char buf[100];
     snprintf(buf, sizeof(buf), "avctx_extradata_%d.bin", avctx->frame_num);
     fptr = fopen(buf, "wb");
     fwrite(avctx->extradata, sizeof(uint8_t), avctx->extradata_size/sizeof(uint8_t) , fptr);
     fclose(fptr);
+    */
 
     if (ffcodec(avctx->codec)->bsfs) {
         const AVCodecParameters *par = avctx->internal->bsf->par_out;
