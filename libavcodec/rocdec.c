@@ -139,7 +139,6 @@ static int ROCDECAPI rocdec_handle_video_sequence(void *opaque, RocdecVideoForma
     avctx->coded_width = rocdecinfo.width = format->coded_width;
     avctx->coded_height = rocdecinfo.height = format->coded_height;
 
-    // TODO: Check whether to use display_rect or target_rect
     // apply cropping
     rocdecinfo.display_rect.left = format->display_area.left + ctx->crop.left;
     rocdecinfo.display_rect.top = format->display_area.top + ctx->crop.top;
@@ -319,12 +318,6 @@ static int ROCDECAPI rocdec_handle_video_sequence(void *opaque, RocdecVideoForma
             return 0;
     }
 
-    // TODO: Check conditions
-    /*if (ctx->deint_mode_current != cudaVideoDeinterlaceMode_Weave && !ctx->drop_second_field) {
-        avctx->framerate = av_mul_q(avctx->framerate, (AVRational){2, 1});
-        fifo_size_mul = 2;
-    }*/
-
     old_nb_surfaces = ctx->nb_surfaces;
     ctx->nb_surfaces = FFMAX(ctx->nb_surfaces, format->min_num_decode_surfaces + 3);
     if (avctx->extra_hw_frames > 0)
@@ -410,9 +403,7 @@ static int rocdec_is_buffer_full(AVCodecContext *avctx)
     RocdecContext *ctx = avctx->priv_data;
 
     int shift = 0;
-    /*if (ctx->deint_mode != cudaVideoDeinterlaceMode_Weave && !ctx->drop_second_field)
-        shift = 1;
-    */
+
     // shift/divide frame count to ensure the buffer is still signalled full if one half-frame has already been returned when deinterlacing.
     return ((av_fifo_can_read(ctx->frame_queue) + shift) >> shift) + ctx->rocdec_parse_info.max_display_delay >= ctx->nb_surfaces;
 }
@@ -530,8 +521,6 @@ static int rocdec_output_frame(AVCodecContext *avctx, AVFrame *frame)
             av_log(avctx, AV_LOG_ERROR, "RocDecode -- Decode Error occurred for picture: %d", parsed_frame.dispinfo.picture_index);
         }
 
-        //avctx->pix_fmt = AV_PIX_FMT_AMD_GPU;
-
         if (avctx->pix_fmt == AV_PIX_FMT_AMD_GPU) {
             ret = av_hwframe_get_buffer(ctx->hwframe, frame, 0);
             if (ret < 0) {
@@ -549,13 +538,10 @@ static int rocdec_output_frame(AVCodecContext *avctx, AVFrame *frame)
 
             pixdesc = av_pix_fmt_desc_get(avctx->sw_pix_fmt);
 
-            //int dst_pitch = disp_width_ * byte_per_pixel_;
             uint32_t byte_per_pixel_ = ctx->rocdec_parse_info.ext_video_info->format.bit_depth_luma_minus8 > 0 ? 2 : 1;
-            
-            // TODO: Might not need to add display_rect, since cuvid also directly sends mapped_frame
-            uint8_t *p_src_ptr_y = (uint8_t *)(src_dev_ptr[0]); // + 
-                                //(ctx->rocdec_parse_info.ext_video_info->format.display_area.top + ctx->crop.top) * src_pitch[0] + 
-                                //(ctx->rocdec_parse_info.ext_video_info->format.display_area.left + ctx->crop.left) * byte_per_pixel_;
+            uint8_t *p_src_ptr_y = (uint8_t *)(src_dev_ptr[0]) + 
+                                (ctx->rocdec_parse_info.ext_video_info->format.display_area.top + ctx->crop.top) * src_pitch[0] + 
+                                (ctx->rocdec_parse_info.ext_video_info->format.display_area.left + ctx->crop.left) * byte_per_pixel_;
 
             for (i = 0; i < pixdesc->nb_components; i++) {
                 int height = avctx->height >> (i ? pixdesc->log2_chroma_h : 0);
@@ -572,15 +558,10 @@ static int rocdec_output_frame(AVCodecContext *avctx, AVFrame *frame)
                 };
 
                 ret = CHECK_HIP(hipMemcpyParam2DAsync(&cpy, device_hwctx->stream));
-                /*
-                ret = CHECK_HIP(hipMemcpy2DAsync(frame->data[i], frame->linesize[i], src_dev_ptr[i], src_pitch[i], 
-                                FFMIN(src_pitch[i], frame->linesize[i]), height, hipMemcpyDeviceToDevice, device_hwctx->stream));
-                */
                 if (ret < 0) {
                     av_frame_unref(frame);
                     return ret;
                 }
-                // no need - offset += height;
             }
         } else if (avctx->pix_fmt == AV_PIX_FMT_NV12      ||
                    avctx->pix_fmt == AV_PIX_FMT_P010      ||
@@ -621,11 +602,9 @@ static int rocdec_output_frame(AVCodecContext *avctx, AVFrame *frame)
                 uint8_t *p_src_ptr_y = (uint8_t *)(src_dev_ptr[i]) + 
                                 (ctx->rocdec_parse_info.ext_video_info->format.display_area.top + ctx->crop.top) * src_pitch[i] + 
                                 (ctx->rocdec_parse_info.ext_video_info->format.display_area.left + ctx->crop.left) * byte_per_pixel_;
-                tmp_frame->data[i]     = (uint8_t*)p_src_ptr_y; //+ offset;
-                tmp_frame->linesize[i] = src_pitch[i];
+                tmp_frame->data[i]     = (uint8_t*)p_src_ptr_y;
 
                 //tmp_frame->height = avctx->height >> (i ? pixdesc->log2_chroma_h : 0);
-                //offset += src_pitch[0] * (avctx->height >> (i ? pixdesc->log2_chroma_h : 0));
             }
 
             ret = ff_get_buffer(avctx, frame, 0);
@@ -945,15 +924,6 @@ static av_cold int rocdec_decode_init(AVCodecContext *avctx)
         return AVERROR_BUG;
     }
 
-    // Debug
-    /*FILE *fptr;
-    char buf[100];
-    snprintf(buf, sizeof(buf), "avctx_extradata_%d.bin", avctx->frame_num);
-    fptr = fopen(buf, "wb");
-    fwrite(avctx->extradata, sizeof(uint8_t), avctx->extradata_size/sizeof(uint8_t) , fptr);
-    fclose(fptr);
-    */
-
     if (ffcodec(avctx->codec)->bsfs) {
         const AVCodecParameters *par = avctx->internal->bsf->par_out;
         extradata = par->extradata;
@@ -1079,14 +1049,8 @@ static void rocdec_flush(AVCodecContext *avctx)
 #define OFFSET(x) offsetof(RocdecContext, x)
 #define VD AV_OPT_FLAG_VIDEO_PARAM | AV_OPT_FLAG_DECODING_PARAM
 static const AVOption options[] = {
-    // TODO: Check about these modes
-    //{ "deint",    "Set deinterlacing mode", OFFSET(deint_mode), AV_OPT_TYPE_INT,   { .i64 = cudaVideoDeinterlaceMode_Weave    }, cudaVideoDeinterlaceMode_Weave, cudaVideoDeinterlaceMode_Adaptive, VD, .unit = "deint" },
-    //{ "weave",    "Weave deinterlacing (do nothing)",        0, AV_OPT_TYPE_CONST, { .i64 = cudaVideoDeinterlaceMode_Weave    }, 0, 0, VD, .unit = "deint" },
-    //{ "bob",      "Bob deinterlacing",                       0, AV_OPT_TYPE_CONST, { .i64 = cudaVideoDeinterlaceMode_Bob      }, 0, 0, VD, .unit = "deint" },
-    //{ "adaptive", "Adaptive deinterlacing",                  0, AV_OPT_TYPE_CONST, { .i64 = cudaVideoDeinterlaceMode_Adaptive }, 0, 0, VD, .unit = "deint" },
     { "gpu",      "GPU to be used for decoding", OFFSET(amd_gpu), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, VD },
     { "surfaces", "Maximum surfaces to be used for decoding", OFFSET(nb_surfaces), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, INT_MAX, VD | AV_OPT_FLAG_DEPRECATED },
-    //{ "drop_second_field", "Drop second field when deinterlacing", OFFSET(drop_second_field), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, VD },
     { "crop",     "Crop (top)x(bottom)x(left)x(right)", OFFSET(crop_expr), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, VD },
     { "resize",   "Resize (width)x(height)", OFFSET(resize_expr), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, VD },
     { NULL }

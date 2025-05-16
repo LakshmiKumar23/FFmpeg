@@ -160,7 +160,7 @@ static int rocdecode_get_buffer(AVHWFramesContext *ctx, AVFrame *frame)
         return res;
 
     // YUV420P is a special case.
-    // Nvenc expects the U/V planes in swapped order from how ffmpeg expects them, also chroma is half-aligned
+    // Rocdec expects the U/V planes in swapped order from how ffmpeg expects them, also chroma is half-aligned
     if (ctx->sw_format == AV_PIX_FMT_YUV420P) {
         frame->linesize[1] = frame->linesize[2] = frame->linesize[0] / 2;
         frame->data[2]     = frame->data[1];
@@ -192,7 +192,6 @@ static int rocdecode_transfer_get_formats(AVHWFramesContext *ctx,
     return 0;
 }
 
-// TODO: port to rocm
 static int rocdecode_transfer_data(AVHWFramesContext *ctx, AVFrame *dst,
                                 const AVFrame *src)
 {
