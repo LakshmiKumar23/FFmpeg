@@ -94,14 +94,6 @@ typedef struct RocdecContext
 
 } RocdecContext;
 
-typedef struct RocdecParsedFrame
-{
-    RocdecParserDispInfo dispinfo;
-    /*int second_field;
-    int is_deinterlacing;
-    */
-} RocdecParsedFrame;
-
 #define CHECK_ROCDECODE(x) FF_ROCDECODE_CHECK(x)
 #define CHECK_HIP(x) FF_HIP_CHECK(avctx, x)
 
@@ -385,15 +377,12 @@ static int ROCDECAPI rocdec_handle_picture_display(void *opaque, RocdecParserDis
 {
     AVCodecContext *avctx = opaque;
     RocdecContext *ctx = avctx->priv_data;
-    RocdecParsedFrame parsed_frame = { { 0 } };
-
-    parsed_frame.dispinfo = *dispinfo;
     ctx->internal_error = 0;
 
     // For some reason, dispinfo->progressive_frame is sometimes wrong.
-    parsed_frame.dispinfo.progressive_frame = ctx->progressive_sequence;
+    dispinfo->progressive_frame = ctx->progressive_sequence;
 
-    av_fifo_write(ctx->frame_queue, &parsed_frame, 1);
+    av_fifo_write(ctx->frame_queue, dispinfo, 1);
 
     return 1;
 }
@@ -469,7 +458,7 @@ static int rocdec_output_frame(AVCodecContext *avctx, AVFrame *frame)
     RocdecContext *ctx = avctx->priv_data;
     AVHWDeviceContext *device_ctx = (AVHWDeviceContext*)ctx->hwdevice->data;
     AVRocDecodeDeviceContext *device_hwctx = device_ctx->hwctx;
-    RocdecParsedFrame parsed_frame;
+    RocdecParserDispInfo parsed_frame;
     int ret = 0, eret = 0;
 
     av_log(avctx, AV_LOG_VERBOSE, "rocdec_output_frame with pixel format %s\n", av_get_pix_fmt_name(avctx->pix_fmt));
@@ -494,7 +483,6 @@ static int rocdec_output_frame(AVCodecContext *avctx, AVFrame *frame)
             return ret;
     }
 
-
     if (av_fifo_read(ctx->frame_queue, &parsed_frame, 1) >= 0) {
         const AVPixFmtDescriptor *pixdesc;
         RocdecProcParams params;
@@ -504,10 +492,10 @@ static int rocdec_output_frame(AVCodecContext *avctx, AVFrame *frame)
         int i;
 
         memset(&params, 0, sizeof(params));
-        params.progressive_frame = parsed_frame.dispinfo.progressive_frame;
-        params.top_field_first = parsed_frame.dispinfo.top_field_first;
+        params.progressive_frame = parsed_frame.progressive_frame;
+        params.top_field_first = parsed_frame.top_field_first;
 
-        ret = CHECK_ROCDECODE(rocDecGetVideoFrame(ctx->rocdecdecoder, parsed_frame.dispinfo.picture_index,
+        ret = CHECK_ROCDECODE(rocDecGetVideoFrame(ctx->rocdecdecoder, parsed_frame.picture_index,
                             src_dev_ptr, src_pitch, &params));
         if (ret < 0) {
             av_frame_unref(frame);
@@ -516,9 +504,9 @@ static int rocdec_output_frame(AVCodecContext *avctx, AVFrame *frame)
 
         RocdecDecodeStatus dec_status;
         memset(&dec_status, 0, sizeof(dec_status));
-        rocDecStatus result = rocDecGetDecodeStatus(ctx->rocdecdecoder, parsed_frame.dispinfo.picture_index, &dec_status);
+        rocDecStatus result = rocDecGetDecodeStatus(ctx->rocdecdecoder, parsed_frame.picture_index, &dec_status);
         if (result == ROCDEC_SUCCESS && (dec_status.decode_status == rocDecodeStatus_Error || dec_status.decode_status == rocDecodeStatus_Error_Concealed)) {
-            av_log(avctx, AV_LOG_ERROR, "RocDecode -- Decode Error occurred for picture: %d", parsed_frame.dispinfo.picture_index);
+            av_log(avctx, AV_LOG_ERROR, "RocDecode -- Decode Error occurred for picture: %d", parsed_frame.picture_index);
         }
 
         if (avctx->pix_fmt == AV_PIX_FMT_AMD_GPU) {
@@ -603,7 +591,7 @@ static int rocdec_output_frame(AVCodecContext *avctx, AVFrame *frame)
                                 (ctx->rocdec_parse_info.ext_video_info->format.display_area.top + ctx->crop.top) * src_pitch[i] + 
                                 (ctx->rocdec_parse_info.ext_video_info->format.display_area.left + ctx->crop.left) * byte_per_pixel_;
                 tmp_frame->data[i]     = (uint8_t*)p_src_ptr_y;
-
+                tmp_frame->linesize[i] = src_pitch[i];
                 //tmp_frame->height = avctx->height >> (i ? pixdesc->log2_chroma_h : 0);
             }
 
@@ -629,28 +617,28 @@ static int rocdec_output_frame(AVCodecContext *avctx, AVFrame *frame)
             return ret;
         }
 
-        if (ctx->key_frame[parsed_frame.dispinfo.picture_index])
+        if (ctx->key_frame[parsed_frame.picture_index])
             frame->flags |= AV_FRAME_FLAG_KEY;
         else
             frame->flags &= ~AV_FRAME_FLAG_KEY;
-        ctx->key_frame[parsed_frame.dispinfo.picture_index] = 0;
+        ctx->key_frame[parsed_frame.picture_index] = 0;
 
         frame->width = avctx->width;
         frame->height = avctx->height;
         if (avctx->pkt_timebase.num && avctx->pkt_timebase.den)
-            frame->pts = av_rescale_q(parsed_frame.dispinfo.pts, (AVRational){1, 10000000}, avctx->pkt_timebase);
+            frame->pts = av_rescale_q(parsed_frame.pts, (AVRational){1, 10000000}, avctx->pkt_timebase);
         else
-            frame->pts = parsed_frame.dispinfo.pts;
+            frame->pts = parsed_frame.pts;
 
         /* CUVIDs opaque reordering breaks the internal pkt logic.
          * So set pkt_pts and clear all the other pkt_ fields.
          */
         frame->duration = 0;
 
-        if (!parsed_frame.dispinfo.progressive_frame)
+        if (!parsed_frame.progressive_frame)
             frame->flags |= AV_FRAME_FLAG_INTERLACED;
 
-        if ((frame->flags & AV_FRAME_FLAG_INTERLACED) && parsed_frame.dispinfo.top_field_first)
+        if ((frame->flags & AV_FRAME_FLAG_INTERLACED) && parsed_frame.top_field_first)
             frame->flags |= AV_FRAME_FLAG_TOP_FIELD_FIRST;
     } else if (ctx->decoder_flushing) {
         ret = AVERROR_EOF;
@@ -842,7 +830,7 @@ static av_cold int rocdec_decode_init(AVCodecContext *avctx)
     if(ctx->nb_surfaces < 0)
         ctx->nb_surfaces = ROCDEC_DEFAULT_NUM_SURFACES;
 
-    ctx->frame_queue = av_fifo_alloc2(ctx->nb_surfaces, sizeof(RocdecParsedFrame), 0);
+    ctx->frame_queue = av_fifo_alloc2(ctx->nb_surfaces, sizeof(RocdecParserDispInfo), 0);
     if (!ctx->frame_queue) {
         ret = AVERROR(ENOMEM);
         rocdec_decode_end(avctx);
