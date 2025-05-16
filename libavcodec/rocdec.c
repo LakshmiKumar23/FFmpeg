@@ -523,6 +523,15 @@ static int rocdec_output_frame(AVCodecContext *avctx, AVFrame *frame)
             return ret;
         }
 
+        RocdecDecodeStatus dec_status;
+        memset(&dec_status, 0, sizeof(dec_status));
+        rocDecStatus result = rocDecGetDecodeStatus(ctx->rocdecdecoder, parsed_frame.dispinfo.picture_index, &dec_status);
+        if (result == ROCDEC_SUCCESS && (dec_status.decode_status == rocDecodeStatus_Error || dec_status.decode_status == rocDecodeStatus_Error_Concealed)) {
+            av_log(avctx, AV_LOG_ERROR, "RocDecode -- Decode Error occurred for picture: %d", parsed_frame.dispinfo.picture_index);
+        }
+
+        //avctx->pix_fmt = AV_PIX_FMT_AMD_GPU;
+
         if (avctx->pix_fmt == AV_PIX_FMT_AMD_GPU) {
             ret = av_hwframe_get_buffer(ctx->hwframe, frame, 0);
             if (ret < 0) {
@@ -544,19 +553,16 @@ static int rocdec_output_frame(AVCodecContext *avctx, AVFrame *frame)
             uint32_t byte_per_pixel_ = ctx->rocdec_parse_info.ext_video_info->format.bit_depth_luma_minus8 > 0 ? 2 : 1;
             
             // TODO: Might not need to add display_rect, since cuvid also directly sends mapped_frame
-            // Use src_pitch[0]
-            // offset = 0; src_device_ptr[0] is luma ; src_device_ptr[1] is chroma in our case, so offset is 0 in both.
-            // first iterator loop gives luma, 2nd gives chroma
             uint8_t *p_src_ptr_y = (uint8_t *)(src_dev_ptr[0]); // + 
                                 //(ctx->rocdec_parse_info.ext_video_info->format.display_area.top + ctx->crop.top) * src_pitch[0] + 
                                 //(ctx->rocdec_parse_info.ext_video_info->format.display_area.left + ctx->crop.left) * byte_per_pixel_;
 
             for (i = 0; i < pixdesc->nb_components; i++) {
                 int height = avctx->height >> (i ? pixdesc->log2_chroma_h : 0);
-                /* hip_Memcpy2D cpy = {
+                hip_Memcpy2D cpy = {
                     .srcMemoryType = hipMemoryTypeDevice,
                     .dstMemoryType = hipMemoryTypeDevice,
-                    .srcDevice     = src_dev_ptr[i], //or p_src_ptr_y
+                    .srcDevice     = src_dev_ptr[i],
                     .dstDevice     = (void *)frame->data[i],
                     .srcPitch      = src_pitch[i],
                     .dstPitch      = frame->linesize[i],
@@ -564,11 +570,12 @@ static int rocdec_output_frame(AVCodecContext *avctx, AVFrame *frame)
                     .WidthInBytes  = FFMIN(src_pitch[i], frame->linesize[i]),
                     .Height        = height,
                 };
-                // needs all arguments. Passing hip_Memcpy2D complains about missing args
-                ret = CHECK_HIP(hipMemcpy2DAsync(&cpy, device_hwctx->stream));
-                */
+
+                ret = CHECK_HIP(hipMemcpyParam2DAsync(&cpy, device_hwctx->stream));
+                /*
                 ret = CHECK_HIP(hipMemcpy2DAsync(frame->data[i], frame->linesize[i], src_dev_ptr[i], src_pitch[i], 
                                 FFMIN(src_pitch[i], frame->linesize[i]), height, hipMemcpyDeviceToDevice, device_hwctx->stream));
+                */
                 if (ret < 0) {
                     av_frame_unref(frame);
                     return ret;
@@ -608,10 +615,16 @@ static int rocdec_output_frame(AVCodecContext *avctx, AVFrame *frame)
              * YUV420 because the pitch value is different for the chroma
              * planes.
              */
+            uint32_t byte_per_pixel_ = ctx->rocdec_parse_info.ext_video_info->format.bit_depth_luma_minus8 > 0 ? 2 : 1;
+
             for (i = 0; i < pixdesc->nb_components; i++) {
-                tmp_frame->data[i]     = (uint8_t*)src_dev_ptr[i]; //+ offset;
+                uint8_t *p_src_ptr_y = (uint8_t *)(src_dev_ptr[i]) + 
+                                (ctx->rocdec_parse_info.ext_video_info->format.display_area.top + ctx->crop.top) * src_pitch[i] + 
+                                (ctx->rocdec_parse_info.ext_video_info->format.display_area.left + ctx->crop.left) * byte_per_pixel_;
+                tmp_frame->data[i]     = (uint8_t*)p_src_ptr_y; //+ offset;
                 tmp_frame->linesize[i] = src_pitch[i];
-                int height = avctx->height >> (i ? pixdesc->log2_chroma_h : 0);
+
+                //tmp_frame->height = avctx->height >> (i ? pixdesc->log2_chroma_h : 0);
                 //offset += src_pitch[0] * (avctx->height >> (i ? pixdesc->log2_chroma_h : 0));
             }
 
@@ -819,7 +832,7 @@ static av_cold int rocdec_decode_init(AVCodecContext *avctx)
     ctx->pkt = avctx->internal->in_pkt;
     // TODO: Check if we need this
     // Accelerated transcoding scenarios with 'ffmpeg' require that the
-    // pix_fmt be set to AV_PIX_FMT_CUDA early. The sw_pix_fmt, and the
+    // pix_fmt be set to AV_PIX_FMT_AMD_GPU early. The sw_pix_fmt, and the
     // pix_fmt for non-accelerated transcoding, do not need to be correct
     // but need to be set to something.
     ret = ff_get_format(avctx, pix_fmts);

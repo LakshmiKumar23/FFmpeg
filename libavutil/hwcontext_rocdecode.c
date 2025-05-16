@@ -56,7 +56,7 @@ static const enum AVPixelFormat supported_formats[] = {
     AV_PIX_FMT_BGR32,
 };
 
-#define CHECK_HIP_CALL(x) FF_HIP_CHECK(device_ctx, x)
+#define CHECK_HIP(x) FF_HIP_CHECK(device_ctx, x)
 
 static int rocdecode_frames_get_constraints(AVHWDeviceContext *ctx,
                                     const void *hwconfig,
@@ -84,7 +84,7 @@ static void rocdecode_buffer_free(void *opaque, uint8_t *data) {
     AVHWFramesContext        *ctx = opaque;
     AVHWDeviceContext *device_ctx = ctx->device_ctx;
 
-    CHECK_HIP_CALL(hipFree(data));
+    CHECK_HIP(hipFree(data));
 }
 
 static AVBufferRef *rocdecode_pool_alloc(void *opaque, size_t size)
@@ -95,11 +95,11 @@ static AVBufferRef *rocdecode_pool_alloc(void *opaque, size_t size)
     AVBufferRef *ret = NULL;
     void* data;
 
-    CHECK_HIP_CALL(hipMalloc(&data, size));
+    CHECK_HIP(hipMalloc(&data, size));
 
     ret = av_buffer_create((uint8_t*)data, size, rocdecode_buffer_free, ctx, 0);
     if (!ret)
-        CHECK_HIP_CALL(hipFree(data));
+        CHECK_HIP(hipFree(data));
 
     return ret;
 }
@@ -121,7 +121,7 @@ static int rocdecode_frames_init(AVHWFramesContext *ctx)
         return AVERROR(ENOSYS);
     }
 
-    err = CHECK_HIP_CALL(hipDeviceGetAttribute(&priv->tex_alignment,
+    err = CHECK_HIP(hipDeviceGetAttribute(&priv->tex_alignment,
                                             hipDeviceAttributeTextureAlignment ,
                                             hwctx->internal->device));
     if (err < 0)
@@ -167,7 +167,7 @@ static int rocdecode_get_buffer(AVHWFramesContext *ctx, AVFrame *frame)
         frame->data[1]     = frame->data[2] + frame->linesize[2] * (ctx->height / 2);
     }
 
-    frame->format = AV_PIX_FMT_CUDA;
+    frame->format = AV_PIX_FMT_AMD_GPU;
     frame->width  = ctx->width;
     frame->height = ctx->height;
 
@@ -196,7 +196,7 @@ static int rocdecode_transfer_get_formats(AVHWFramesContext *ctx,
 static int rocdecode_transfer_data(AVHWFramesContext *ctx, AVFrame *dst,
                                 const AVFrame *src)
 {
-    /*RocDecodeFramesContext       *priv = ctx->hwctx;
+    RocDecodeFramesContext       *priv = ctx->hwctx;
     AVHWDeviceContext *device_ctx = ctx->device_ctx;
     AVRocDecodeDeviceContext    *hwctx = device_ctx->hwctx;
 
@@ -207,7 +207,7 @@ static int rocdecode_transfer_data(AVHWFramesContext *ctx, AVFrame *dst,
         return AVERROR(ENOSYS);
 
     for (i = 0; i < FF_ARRAY_ELEMS(src->data) && src->data[i]; i++) {
-        CUDA_MEMCPY2D cpy = {
+        hip_Memcpy2D cpy = {
             .srcPitch      = src->linesize[i],
             .dstPitch      = dst->linesize[i],
             .WidthInBytes  = FFMIN(src->linesize[i], dst->linesize[i]),
@@ -215,32 +215,32 @@ static int rocdecode_transfer_data(AVHWFramesContext *ctx, AVFrame *dst,
         };
 
         if (src->hw_frames_ctx) {
-            cpy.srcMemoryType = CU_MEMORYTYPE_DEVICE;
-            cpy.srcDevice     = (CUdeviceptr)src->data[i];
+            cpy.srcMemoryType = hipMemoryTypeDevice;
+            cpy.srcDevice     = (void *)src->data[i];
         } else {
-            cpy.srcMemoryType = CU_MEMORYTYPE_HOST;
+            cpy.srcMemoryType = hipMemoryTypeHost;
             cpy.srcHost       = src->data[i];
         }
 
         if (dst->hw_frames_ctx) {
-            cpy.dstMemoryType = CU_MEMORYTYPE_DEVICE;
-            cpy.dstDevice     = (CUdeviceptr)dst->data[i];
+            cpy.dstMemoryType = hipMemoryTypeDevice;
+            cpy.dstDevice     = (void *)dst->data[i];
         } else {
-            cpy.dstMemoryType = CU_MEMORYTYPE_HOST;
+            cpy.dstMemoryType = hipMemoryTypeHost;
             cpy.dstHost       = dst->data[i];
         }
 
-        ret = CHECK_CU(cu->cuMemcpy2DAsync(&cpy, hwctx->stream));
+        ret = CHECK_HIP(hipMemcpyParam2DAsync(&cpy, hwctx->stream));
         if (ret < 0)
-            goto exit;
+            return ret;
     }
 
     if (!dst->hw_frames_ctx) {
-        ret = CHECK_CU(cu->cuStreamSynchronize(hwctx->stream));
+        ret = CHECK_HIP(hipStreamSynchronize(hwctx->stream));
         if (ret < 0)
-            goto exit;
+            return ret;
     }
-    */
+
     return 0;
 }
 
@@ -286,13 +286,13 @@ static int rocdecode_device_create(AVHWDeviceContext *device_ctx,
         return ret;
     }
 
-    ret = CHECK_HIP_CALL(hipInit(device_idx));
+    ret = CHECK_HIP(hipInit(device_idx));
     if (ret < 0) {
         rocdecode_device_uninit(device_ctx);
         return ret;
     }
 
-    ret = CHECK_HIP_CALL(hipDeviceGet(&hwctx->internal->device, device_idx));
+    ret = CHECK_HIP(hipDeviceGet(&hwctx->internal->device, device_idx));
     if (ret < 0) {
         rocdecode_device_uninit(device_ctx);
         return ret;
@@ -314,13 +314,13 @@ static int rocdecode_device_derive(AVHWDeviceContext *device_ctx,
         return ret;
     }
 
-    ret = CHECK_HIP_CALL(hipInit(hwctx->internal->device));
+    ret = CHECK_HIP(hipInit(hwctx->internal->device));
     if (ret < 0) {
         rocdecode_device_uninit(device_ctx);
         return ret;
     }
 
-    ret = CHECK_HIP_CALL(hipGetDeviceCount(&device_count));
+    ret = CHECK_HIP(hipGetDeviceCount(&device_count));
     if (ret < 0) {
         rocdecode_device_uninit(device_ctx);
         return ret;
@@ -331,13 +331,13 @@ static int rocdecode_device_derive(AVHWDeviceContext *device_ctx,
         hipDevice_t dev;
         hipUUID uuid;
 
-        ret = CHECK_HIP_CALL(hipDeviceGet(&dev, i));
+        ret = CHECK_HIP(hipDeviceGet(&dev, i));
         if (ret < 0) {
             rocdecode_device_uninit(device_ctx);
             return ret;
         }
 
-        ret = CHECK_HIP_CALL(hipDeviceGetUuid(&uuid, dev));
+        ret = CHECK_HIP(hipDeviceGetUuid(&uuid, dev));
         if (ret < 0) {
             rocdecode_device_uninit(device_ctx);
             return ret;
