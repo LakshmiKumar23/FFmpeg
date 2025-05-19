@@ -396,10 +396,8 @@ static int rocdec_is_buffer_full(AVCodecContext *avctx)
 static int rocdec_decode_packet(AVCodecContext *avctx, const AVPacket *avpkt)
 {
     RocdecContext *ctx = avctx->priv_data;
-    AVHWDeviceContext *device_ctx = (AVHWDeviceContext*)ctx->hwdevice->data;
-    AVRocDecodeDeviceContext *device_hwctx = device_ctx->hwctx;
     RocdecSourceDataPacket rocdec_pkt;
-    int ret = 0, eret = 0, is_flush = ctx->decoder_flushing;
+    int ret = 0, is_flush = ctx->decoder_flushing;
 
     if (is_flush && avpkt && avpkt->size)
         return AVERROR_EOF;
@@ -453,7 +451,7 @@ static int rocdec_output_frame(AVCodecContext *avctx, AVFrame *frame)
     AVHWDeviceContext *device_ctx = (AVHWDeviceContext*)ctx->hwdevice->data;
     AVRocDecodeDeviceContext *device_hwctx = device_ctx->hwctx;
     RocdecParserDispInfo parsed_frame;
-    int ret = 0, eret = 0;
+    int ret = 0;
 
     if (ctx->decoder_flushing) {
         ret = rocdec_decode_packet(avctx, NULL);
@@ -480,7 +478,6 @@ static int rocdec_output_frame(AVCodecContext *avctx, AVFrame *frame)
         RocdecProcParams params;
         void * src_dev_ptr[3] = { 0 };
         uint32_t src_pitch[3] = { 0 };
-        int offset = 0;
         int i;
 
         memset(&params, 0, sizeof(params));
@@ -518,11 +515,6 @@ static int rocdec_output_frame(AVCodecContext *avctx, AVFrame *frame)
 
             pixdesc = av_pix_fmt_desc_get(avctx->sw_pix_fmt);
 
-            uint32_t byte_per_pixel_ = ctx->rocdec_parse_info.ext_video_info->format.bit_depth_luma_minus8 > 0 ? 2 : 1;
-            uint8_t *p_src_ptr_y = (uint8_t *)(src_dev_ptr[0]) + 
-                                (ctx->rocdec_parse_info.ext_video_info->format.display_area.top + ctx->crop.top) * src_pitch[0] + 
-                                (ctx->rocdec_parse_info.ext_video_info->format.display_area.left + ctx->crop.left) * byte_per_pixel_;
-
             for (i = 0; i < pixdesc->nb_components; i++) {
                 int height = avctx->height >> (i ? pixdesc->log2_chroma_h : 0);
                 hip_Memcpy2D cpy = {
@@ -548,7 +540,6 @@ static int rocdec_output_frame(AVCodecContext *avctx, AVFrame *frame)
                    avctx->pix_fmt == AV_PIX_FMT_P016      ||
                    avctx->pix_fmt == AV_PIX_FMT_YUV444P   ||
                    avctx->pix_fmt == AV_PIX_FMT_YUV444P16) {
-            unsigned int offset = 0;
             AVFrame *tmp_frame = av_frame_alloc();
             if (!tmp_frame) {
                 av_log(avctx, AV_LOG_ERROR, "av_frame_alloc failed\n");
@@ -670,7 +661,7 @@ static av_cold int rocdec_decode_end(AVCodecContext *avctx)
 }
 
 static int rocdec_test_capabilities(AVCodecContext *avctx,
-    const RocDecoderCreateInfo *rocdec_parse_info,
+    const RocdecParserParams *rocdec_parse_info,
     int probed_width,
     int probed_height,
     int bit_depth, int is_yuv422, int is_yuv444) 
@@ -748,8 +739,6 @@ static int rocdec_test_capabilities(AVCodecContext *avctx,
 static av_cold int rocdec_decode_init(AVCodecContext *avctx)
 {
     RocdecContext *ctx = avctx->priv_data;
-    AVRocDecodeDeviceContext *device_hwctx;
-    AVHWDeviceContext *device_ctx;
     AVHWFramesContext *hwframe_ctx;
     RocdecSourceDataPacket seq_pkt;
     uint8_t *extradata;
@@ -872,9 +861,6 @@ static av_cold int rocdec_decode_init(AVCodecContext *avctx)
         hwframe_ctx = (AVHWFramesContext*)ctx->hwframe->data;
     }
 
-    device_ctx = hwframe_ctx->device_ctx;
-    device_hwctx = device_ctx->hwctx;
-
     memset(&ctx->rocdec_parse_info, 0, sizeof(ctx->rocdec_parse_info));
     memset(&seq_pkt, 0, sizeof(seq_pkt));
 
@@ -989,8 +975,6 @@ static av_cold int rocdec_decode_init(AVCodecContext *avctx)
 static void rocdec_flush(AVCodecContext *avctx)
 {
     RocdecContext *ctx = avctx->priv_data;
-    AVHWDeviceContext *device_ctx = (AVHWDeviceContext*)ctx->hwdevice->data;
-    AVRocDecodeDeviceContext *device_hwctx = device_ctx->hwctx;
     RocdecSourceDataPacket seq_pkt = { 0 };
     int ret;
 
