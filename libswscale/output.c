@@ -1435,8 +1435,8 @@ yuv2rgba64_full_1_c_template(SwsInternal *c, const int32_t *buf0,
     if (uvalpha == 0) {
         for (i = 0; i < dstW; i++) {
             SUINT Y  = (buf0[i]) >> 2;
-            int U  = (ubuf0[i] - (128 << 11)) >> 2;
-            int V  = (vbuf0[i] - (128 << 11)) >> 2;
+            SUINT U  = (ubuf0[i] - (128 << 11)) >> 2;
+            SUINT V  = (vbuf0[i] - (128 << 11)) >> 2;
             int R, G, B;
 
             Y -= c->yuv2rgb_y_offset;
@@ -1471,8 +1471,8 @@ yuv2rgba64_full_1_c_template(SwsInternal *c, const int32_t *buf0,
 
         for (i = 0; i < dstW; i++) {
             SUINT Y  = (buf0[i]    ) >> 2;
-            int U = (ubuf0[i] * uvalpha1 + ubuf1[i] * uvalpha - (128 << 23)) >> 14;
-            int V = (vbuf0[i] * uvalpha1 + vbuf1[i] * uvalpha - (128 << 23)) >> 14;
+            SUINT U = (ubuf0[i] * uvalpha1 + ubuf1[i] * uvalpha - (128 << 23)) >> 14;
+            SUINT V = (vbuf0[i] * uvalpha1 + vbuf1[i] * uvalpha - (128 << 23)) >> 14;
             int R, G, B;
 
             Y -= c->yuv2rgb_y_offset;
@@ -2317,9 +2317,9 @@ yuv2gbrp_full_X_c(SwsInternal *c, const int16_t *lumFilter,
         Y -= c->yuv2rgb_y_offset;
         Y *= c->yuv2rgb_y_coeff;
         Y += 1 << (SH-1);
-        R = Y + V * c->yuv2rgb_v2r_coeff;
-        G = Y + V * c->yuv2rgb_v2g_coeff + U * c->yuv2rgb_u2g_coeff;
-        B = Y +                            U * c->yuv2rgb_u2b_coeff;
+        R = Y + V * (unsigned)c->yuv2rgb_v2r_coeff;
+        G = Y + V * (unsigned)c->yuv2rgb_v2g_coeff + U * (unsigned)c->yuv2rgb_u2g_coeff;
+        B = Y +                                      U * (unsigned)c->yuv2rgb_u2b_coeff;
 
         if ((R | G | B) & 0xC0000000) {
             R = av_clip_uintp2(R, 30);

@@ -80,8 +80,10 @@ typedef sigjmp_buf checkasm_context;
 void checkasm_check_aacencdsp(void);
 void checkasm_check_aacpsdsp(void);
 void checkasm_check_ac3dsp(void);
+void checkasm_check_aes(void);
 void checkasm_check_afir(void);
 void checkasm_check_alacdsp(void);
+void checkasm_check_apv_dsp(void);
 void checkasm_check_audiodsp(void);
 void checkasm_check_av_tx(void);
 void checkasm_check_blend(void);
@@ -147,6 +149,7 @@ void checkasm_check_videodsp(void);
 void checkasm_check_vorbisdsp(void);
 void checkasm_check_vvc_alf(void);
 void checkasm_check_vvc_mc(void);
+void checkasm_check_vvc_sao(void);
 
 struct CheckasmPerf;
 
