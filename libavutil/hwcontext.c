@@ -109,8 +109,6 @@ typedef struct FFHWDeviceContext {
 
 enum AVHWDeviceType av_hwdevice_find_type_by_name(const char *name)
 {
-    av_log(NULL, AV_LOG_FATAL, "hwaccel name : %s.\n",
-        name);
     int type;
     for (type = 0; type < FF_ARRAY_ELEMS(hw_type_names); type++) {
         if (hw_type_names[type] && !strcmp(hw_type_names[type], name))

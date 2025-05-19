@@ -4748,11 +4748,6 @@ if enabled cuda_nvcc; then
     fi
 fi
 
-#if enabled rocdecode; then
-#    cxx_default="amdclang++"
-#    cc_default="amdclang"
-#fi
-
 set_default arch cc cxx doxygen pkg_config ranlib strip sysinclude \
     target_exec x86asmexe metalcc metallib stdc stdcxx
 enabled cross_compile || host_cc_default=$cc

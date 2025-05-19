@@ -613,7 +613,7 @@ static int rocdec_output_frame(AVCodecContext *avctx, AVFrame *frame)
         else
             frame->pts = parsed_frame.pts;
 
-        /* CUVIDs opaque reordering breaks the internal pkt logic.
+        /* Opaque reordering breaks the internal pkt logic.
          * So set pkt_pts and clear all the other pkt_ fields.
          */
         frame->duration = 0;
