@@ -188,7 +188,7 @@ static int test_device_type(enum AVHWDeviceType type)
                               NULL, 0);
             if (err < 0) {
                 fprintf(stderr, "Test failed for %s with device %s.\n",
-                        name, test_devices[i].possible_devices[j]);
+                       name, test_devices[i].possible_devices[j]);
                 return -1;
             }
             if (err == 0) {
