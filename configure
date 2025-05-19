@@ -359,7 +359,6 @@ External library support:
   --enable-omx             enable OpenMAX IL code [no]
   --enable-omx-rpi         enable OpenMAX IL code for Raspberry Pi [no]
   --enable-rkmpp           enable Rockchip Media Process Platform code [no]
-  --disable-amd_gpu        disable AMD's ROCm video decoding code
   --disable-v4l2-m2m       disable V4L2 mem2mem code [autodetect]
   --disable-vaapi          disable Video Acceleration API (mainly Unix/Intel) code [autodetect]
   --disable-vdpau          disable Nvidia Video Decode and Presentation API for Unix code [autodetect]
@@ -2007,7 +2006,6 @@ HWACCEL_AUTODETECT_LIBRARY_LIST="
     libdrm
     nvdec
     nvenc
-    amd_gpu
     rocdec
     vaapi
     vdpau
@@ -3170,7 +3168,6 @@ dxva2_deps="dxva2api_h DXVA2_ConfigPictureDecode ole32 user32"
 ffnvcodec_deps_any="libdl LoadLibrary"
 mediacodec_deps="android mediandk pthreads"
 nvdec_deps="ffnvcodec"
-#amd_gpu_deps="rocdecode"
 vaapi_x11_deps="xlib_x11"
 videotoolbox_hwaccel_deps="videotoolbox pthreads"
 videotoolbox_hwaccel_extralibs="-framework QuartzCore"
@@ -3187,8 +3184,6 @@ av1_dxva2_hwaccel_deps="dxva2 DXVA_PicParams_AV1"
 av1_dxva2_hwaccel_select="av1_decoder"
 av1_nvdec_hwaccel_deps="nvdec CUVIDAV1PICPARAMS"
 av1_nvdec_hwaccel_select="av1_decoder"
-#av1_amd_gpu_hwaccel_deps="rocdecode"
-#av1_amd_gpu_hwaccel_select="av1_decoder"
 av1_vaapi_hwaccel_deps="vaapi VADecPictureParameterBufferAV1_bit_depth_idx"
 av1_vaapi_hwaccel_select="av1_decoder"
 av1_vdpau_hwaccel_deps="vdpau VdpPictureInfoAV1"
@@ -3213,8 +3208,6 @@ h264_dxva2_hwaccel_deps="dxva2"
 h264_dxva2_hwaccel_select="h264_decoder"
 h264_nvdec_hwaccel_deps="nvdec"
 h264_nvdec_hwaccel_select="h264_decoder"
-#h264_amd_gpu_hwaccel_deps="rocdecode"
-#h264_amd_gpu_hwaccel_select="h264_decoder"
 h264_vaapi_hwaccel_deps="vaapi"
 h264_vaapi_hwaccel_select="h264_decoder"
 h264_vdpau_hwaccel_deps="vdpau"
@@ -3233,8 +3226,6 @@ hevc_dxva2_hwaccel_deps="dxva2 DXVA_PicParams_HEVC"
 hevc_dxva2_hwaccel_select="hevc_decoder"
 hevc_nvdec_hwaccel_deps="nvdec"
 hevc_nvdec_hwaccel_select="hevc_decoder"
-#hevc_amd_gpu_hwaccel_deps="rocdecode"
-#hevc_amd_gpu_hwaccel_select="hevc_decoder"
 hevc_vaapi_hwaccel_deps="vaapi VAPictureParameterBufferHEVC"
 hevc_vaapi_hwaccel_select="hevc_decoder"
 hevc_vdpau_hwaccel_deps="vdpau VdpPictureInfoHEVC"
@@ -3307,8 +3298,6 @@ vp9_dxva2_hwaccel_deps="dxva2 DXVA_PicParams_VP9"
 vp9_dxva2_hwaccel_select="vp9_decoder"
 vp9_nvdec_hwaccel_deps="nvdec"
 vp9_nvdec_hwaccel_select="vp9_decoder"
-#vp9_amd_gpu_hwaccel_deps="rocdecode"
-#vp9_amd_gpu_hwaccel_select="vp9_decoder"
 vp9_vaapi_hwaccel_deps="vaapi VADecPictureParameterBufferVP9_bit_depth"
 vp9_vaapi_hwaccel_select="vp9_decoder"
 vp9_vdpau_hwaccel_deps="vdpau VdpPictureInfoVP9"
@@ -7338,9 +7327,9 @@ if enabled uwp; then
     mediafoundation_extralibs="-lmfplat $mediafoundation_extralibs"
 fi
 
-enabled_any rocdec amd_gpu && add_cppflags '-I/opt/rocm/include/' && add_cppflags '-I/opt/rocm/share/' \
+enabled rocdec && add_cppflags '-I/opt/rocm/include/' && add_cppflags '-I/opt/rocm/share/' \
         && add_cppflags '-D__HIP_PLATFORM_AMD__' && add_cxxflags '-std=c++17' && add_extralibs '/opt/rocm/lib/librocdecode.so'
-enabled_any rocdec amd_gpu && check_headers rocdecode/rocdecode.h
+enabled rocdec && check_headers rocdecode/rocdecode.h
 
 enabled libdrm &&
     check_pkg_config libdrm_getfb2 libdrm "xf86drmMode.h" drmModeGetFB2
@@ -7474,7 +7463,7 @@ enabled amf &&
 #        freebsd|mingw32*|mingw64*|win32|win64|cygwin*)
 #            ;;
 #        *)
-#            disable amd_gpu rocdec
+#            disable rocdec
 #            ;;
 #    esac
 #elif enabled_any aarch64 ppc64 && ! enabled bigendian; then
@@ -7482,17 +7471,15 @@ enabled amf &&
 #        linux)
 #            ;;
 #        *)
-#            disable amd_gpu rocdec
+#            disable rocdec
 #            ;;
 #    esac
 #else
-#    disable amd_gpu rocdec
+#    disable rocdec
 #fi
 
-if enabled_any amd_gpu rocdec; then
+if enabled rocdec; then
     check_cpp_condition rocdec "rocdecode/rocdecode_version.h" \
-        "(ROCDECODE_CHECK_VERSION(0,6,0))"
-    check_cpp_condition amd_gpu "rocdecode/rocdecode_version.h" \
         "(ROCDECODE_CHECK_VERSION(0,6,0))"
 fi
 

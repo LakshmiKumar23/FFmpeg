@@ -59,18 +59,18 @@ typedef struct RocDecContext {
     int           supports_444;
 } RocDecContext;
 
-int ff_amd_gpu_decode_init(AVCodecContext *avctx);
-int ff_amd_gpu_decode_uninit(AVCodecContext *avctx);
-int ff_amd_gpu_start_frame(AVCodecContext *avctx, AVFrame *frame);
-int ff_amd_gpu_start_frame_sep_ref(AVCodecContext *avctx, AVFrame *frame, int has_sep_ref);
-int ff_amd_gpu_end_frame(AVCodecContext *avctx);
-int ff_amd_gpu_simple_end_frame(AVCodecContext *avctx);
-int ff_amd_gpu_simple_decode_slice(AVCodecContext *avctx, const uint8_t *buffer,
+int ff_rocdec_decode_init(AVCodecContext *avctx);
+int ff_rocdec_decode_uninit(AVCodecContext *avctx);
+int ff_rocdec_start_frame(AVCodecContext *avctx, AVFrame *frame);
+int ff_rocdec_start_frame_sep_ref(AVCodecContext *avctx, AVFrame *frame, int has_sep_ref);
+int ff_rocdec_end_frame(AVCodecContext *avctx);
+int ff_rocdec_simple_end_frame(AVCodecContext *avctx);
+int ff_rocdec_simple_decode_slice(AVCodecContext *avctx, const uint8_t *buffer,
                                 uint32_t size);
-int ff_amd_gpu_frame_params(AVCodecContext *avctx,
+int ff_rocdec_frame_params(AVCodecContext *avctx,
                         AVBufferRef *hw_frames_ctx,
                         int dpb_size,
                         int supports_444);
-int ff_amd_gpu_get_ref_idx(AVFrame *frame);
+int ff_rocdec_get_ref_idx(AVFrame *frame);
 
 #endif /* AVCODEC_ROCDEC_H */

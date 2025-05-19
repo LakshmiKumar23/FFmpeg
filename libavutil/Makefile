@@ -202,7 +202,7 @@ OBJS = adler32.o                                                        \
 
 
 OBJS-$(CONFIG_CUDA)                     += hwcontext_cuda.o
-OBJS-$(CONFIG_AMD_GPU)                  += hwcontext_rocdecode.o
+OBJS-$(CONFIG_ROCDEC)                   += hwcontext_rocdecode.o
 OBJS-$(CONFIG_D3D11VA)                  += hwcontext_d3d11va.o
 OBJS-$(CONFIG_D3D12VA)                  += hwcontext_d3d12va.o
 OBJS-$(CONFIG_DXVA2)                    += hwcontext_dxva2.o
@@ -236,7 +236,7 @@ SKIPHEADERS-$(HAVE_CUDA_H)             += hwcontext_cuda.h
 SKIPHEADERS-$(CONFIG_CUDA)             += hwcontext_cuda_internal.h     \
                                           cuda_check.h
 SKIPHEADERS-$(HAVE_ROCDECODE_H)        += hwcontext_rocdecode.h
-SKIPHEADERS-$(CONFIG_AMD_GPU)          += rocdecode_check.h
+SKIPHEADERS-$(CONFIG_ROCDEC)           += rocdecode_check.h
 SKIPHEADERS-$(CONFIG_D3D11VA)          += hwcontext_d3d11va.h
 SKIPHEADERS-$(CONFIG_D3D12VA)          += hwcontext_d3d12va.h
 SKIPHEADERS-$(CONFIG_DXVA2)            += hwcontext_dxva2.h

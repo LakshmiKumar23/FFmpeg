@@ -143,7 +143,7 @@ static const struct {
       { "0.0", "0.1", "1.0", "1.1" } },
     { AV_HWDEVICE_TYPE_VAAPI,
       { "/dev/dri/renderD128", "/dev/dri/renderD129", ":0", "0", "1" } },
-    { AV_HWDEVICE_TYPE_AMD_GPU,
+    { AV_HWDEVICE_TYPE_HIP,
       { "0", "1"} },
 };
 
@@ -172,7 +172,7 @@ static int test_device_type(enum AVHWDeviceType type)
 
     found = 0;
 
-    if (!strcmp(name, "amd_gpu")) {
+    if (!strcmp(name, "rocdec")) {
         err = test_device(type, name, NULL, NULL, 0);
         if (err < 0) {
             fprintf(stderr, "Test failed for %s with default options.\n", name);

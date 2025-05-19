@@ -1134,10 +1134,6 @@ const FFCodec ff_h264_decoder = {
 #if CONFIG_H264_NVDEC_HWACCEL
                                HWACCEL_NVDEC(h264),
 #endif
-/*#if CONFIG_H264_AMD_GPU_HWACCEL
-                               HWACCEL_AMD_GPU(h264),
-#endif
-*/
 #if CONFIG_H264_VAAPI_HWACCEL
                                HWACCEL_VAAPI(h264),
 #endif

@@ -26,7 +26,7 @@
 
 /**
  * @file
- * An API-specific header for AV_HWDEVICE_TYPE_AMD_GPU.
+ * An API-specific header for AV_HWDEVICE_TYPE_HIP.
  *
  * This API supports dynamic frame pools. AVHWFramesContext.pool must return
  * AVBufferRefs whose data pointer is a CUdeviceptr.
@@ -43,7 +43,7 @@ struct AVRocDecodeDeviceContextInternal {
 
 /**
  * @file
- * An API-specific header for AV_HWDEVICE_TYPE_AMD_GPU.
+ * An API-specific header for AV_HWDEVICE_TYPE_HIP.
  *
  */
 

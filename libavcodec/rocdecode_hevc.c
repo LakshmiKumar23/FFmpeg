@@ -89,7 +89,7 @@ static int rocdec_hevc_start_frame(AVCodecContext *avctx,
 
     int i, j, dpb_size, ret;
 
-    ret = ff_amd_gpu_start_frame(avctx, s->cur_frame->f);
+    ret = ff_rocdec_start_frame(avctx, s->cur_frame->f);
     if (ret < 0)
         return ret;
 
@@ -379,7 +379,7 @@ static int rocdec_hevc_frame_params(AVCodecContext *avctx,
 {
     const HEVCContext *s = avctx->priv_data;
     const HEVCSPS *sps = s->pps->sps;
-    return ff_amd_gpu_frame_params(avctx, hw_frames_ctx, sps->temporal_layer[sps->max_sub_layers - 1].max_dec_pic_buffering + 1, 1);
+    return ff_rocdec_frame_params(avctx, hw_frames_ctx, sps->temporal_layer[sps->max_sub_layers - 1].max_dec_pic_buffering + 1, 1);
 }
 
 static int rocdec_hevc_decode_init(AVCodecContext *avctx) {
@@ -393,20 +393,20 @@ static int rocdec_hevc_decode_init(AVCodecContext *avctx) {
         return AVERROR(ENOTSUP);
     }
     av_log(avctx, AV_LOG_VERBOSE, "rocdec_hevc_decode_init: HEVC profile: %d\n", avctx->profile);
-    return ff_amd_gpu_decode_init(avctx);
+    return ff_rocdec_decode_init(avctx);
 }
 
-const FFHWAccel ff_hevc_amd_gpu_hwaccel = {
-    .p.name               = "hevc_amd_gpu",
+const FFHWAccel ff_hevc_rocdec_hwaccel = {
+    .p.name               = "hevc_rocdec",
     .p.type               = AVMEDIA_TYPE_VIDEO,
     .p.id                 = AV_CODEC_ID_HEVC,
-    .p.pix_fmt            = AV_PIX_FMT_AMD_GPU,
+    .p.pix_fmt            = AV_PIX_FMT_HIP,
     .start_frame          = rocdec_hevc_start_frame,
-    .end_frame            = ff_amd_gpu_end_frame,
+    .end_frame            = ff_rocdec_end_frame,
     .decode_slice         = rocdec_hevc_decode_slice,
     .frame_params         = rocdec_hevc_frame_params,
     .init                 = rocdec_hevc_decode_init,
-    .uninit               = ff_amd_gpu_decode_uninit,
+    .uninit               = ff_rocdec_decode_uninit,
     .priv_data_size       = sizeof(RocDecContext),
 };
  

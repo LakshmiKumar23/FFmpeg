@@ -52,7 +52,7 @@ typedef struct RocdecContext
      * and is not owned by us. */
     AVPacket *pkt;
 
-    char *amd_gpu;
+    char *gpu_id;
     int nb_surfaces;
     char *crop_expr;
     char *resize_expr;
@@ -97,7 +97,7 @@ typedef struct RocdecContext
 #define CHECK_ROCDECODE(x) FF_ROCDECODE_CHECK(x)
 #define CHECK_HIP(x) FF_HIP_CHECK(avctx, x)
 
-// NV recommends [2;4] range
+// Rocdecode recommends [2;4] range
 #define ROCDEC_MAX_DISPLAY_DELAY (4)
 
 // Actual pool size will be determined by parser.
@@ -118,11 +118,9 @@ static int ROCDECAPI rocdec_handle_video_sequence(void *opaque, RocdecVideoForma
     int old_width = avctx->width;
     int old_height = avctx->height;
 
-    enum AVPixelFormat pix_fmts[3] = { AV_PIX_FMT_AMD_GPU,
+    enum AVPixelFormat pix_fmts[3] = { AV_PIX_FMT_HIP,
                                        AV_PIX_FMT_NONE,  // Will be updated below
                                        AV_PIX_FMT_NONE };
-
-    av_log(avctx, AV_LOG_VERBOSE, "pfnSequenceCallback, progressive_sequence=%d\n", format->progressive_sequence);
 
     memset(&rocdecinfo, 0, sizeof(rocdecinfo));
 
@@ -272,7 +270,7 @@ static int ROCDECAPI rocdec_handle_video_sequence(void *opaque, RocdecVideoForma
     if (hwframe_ctx->pool && (
             hwframe_ctx->width < avctx->width ||
             hwframe_ctx->height < avctx->height ||
-            hwframe_ctx->format != AV_PIX_FMT_AMD_GPU ||
+            hwframe_ctx->format != AV_PIX_FMT_HIP ||
             hwframe_ctx->sw_format != avctx->sw_pix_fmt)) {
         av_log(avctx, AV_LOG_ERROR, "AVHWFramesContext is already initialized with incompatible parameters\n");
         av_log(avctx, AV_LOG_DEBUG, "width: %d <-> %d\n", hwframe_ctx->width, avctx->width);
@@ -337,7 +335,7 @@ static int ROCDECAPI rocdec_handle_video_sequence(void *opaque, RocdecVideoForma
         return 0;
 
     if (!hwframe_ctx->pool) {
-        hwframe_ctx->format = AV_PIX_FMT_AMD_GPU;
+        hwframe_ctx->format = AV_PIX_FMT_HIP;
         hwframe_ctx->sw_format = avctx->sw_pix_fmt;
         hwframe_ctx->width = avctx->width;
         hwframe_ctx->height = avctx->height;
@@ -360,8 +358,6 @@ static int ROCDECAPI rocdec_handle_picture_decode(void *opaque, RocdecPicParams*
 {
     AVCodecContext *avctx = opaque;
     RocdecContext *ctx = avctx->priv_data;
-
-    av_log(avctx, AV_LOG_VERBOSE, "pfnDecodePicture\n");
 
     if(picparams->intra_pic_flag)
         ctx->key_frame[picparams->curr_pic_idx] = picparams->intra_pic_flag;
@@ -404,8 +400,6 @@ static int rocdec_decode_packet(AVCodecContext *avctx, const AVPacket *avpkt)
     AVRocDecodeDeviceContext *device_hwctx = device_ctx->hwctx;
     RocdecSourceDataPacket rocdec_pkt;
     int ret = 0, eret = 0, is_flush = ctx->decoder_flushing;
-
-    av_log(avctx, AV_LOG_VERBOSE, "rocdec_decode_packet\n");
 
     if (is_flush && avpkt && avpkt->size)
         return AVERROR_EOF;
@@ -461,8 +455,6 @@ static int rocdec_output_frame(AVCodecContext *avctx, AVFrame *frame)
     RocdecParserDispInfo parsed_frame;
     int ret = 0, eret = 0;
 
-    av_log(avctx, AV_LOG_VERBOSE, "rocdec_output_frame with pixel format %s\n", av_get_pix_fmt_name(avctx->pix_fmt));
-
     if (ctx->decoder_flushing) {
         ret = rocdec_decode_packet(avctx, NULL);
         if (ret < 0 && ret != AVERROR_EOF)
@@ -509,7 +501,7 @@ static int rocdec_output_frame(AVCodecContext *avctx, AVFrame *frame)
             av_log(avctx, AV_LOG_ERROR, "RocDecode -- Decode Error occurred for picture: %d", parsed_frame.picture_index);
         }
 
-        if (avctx->pix_fmt == AV_PIX_FMT_AMD_GPU) {
+        if (avctx->pix_fmt == AV_PIX_FMT_HIP) {
             ret = av_hwframe_get_buffer(ctx->hwframe, frame, 0);
             if (ret < 0) {
                 av_log(avctx, AV_LOG_ERROR, "av_hwframe_get_buffer failed\n");
@@ -567,7 +559,7 @@ static int rocdec_output_frame(AVCodecContext *avctx, AVFrame *frame)
 
             pixdesc = av_pix_fmt_desc_get(avctx->sw_pix_fmt);
 
-            tmp_frame->format        = AV_PIX_FMT_AMD_GPU;
+            tmp_frame->format        = AV_PIX_FMT_HIP;
             tmp_frame->hw_frames_ctx = av_buffer_ref(ctx->hwframe);
             if (!tmp_frame->hw_frames_ctx) {
                 ret = AVERROR(ENOMEM);
@@ -764,7 +756,7 @@ static av_cold int rocdec_decode_init(AVCodecContext *avctx)
     int extradata_size;
     int ret = 0;
 
-    enum AVPixelFormat pix_fmts[3] = { AV_PIX_FMT_AMD_GPU,
+    enum AVPixelFormat pix_fmts[3] = { AV_PIX_FMT_HIP,
                                        AV_PIX_FMT_NONE,
                                        AV_PIX_FMT_NONE };
 
@@ -799,7 +791,7 @@ static av_cold int rocdec_decode_init(AVCodecContext *avctx)
     ctx->pkt = avctx->internal->in_pkt;
     // TODO: Check if we need this
     // Accelerated transcoding scenarios with 'ffmpeg' require that the
-    // pix_fmt be set to AV_PIX_FMT_AMD_GPU early. The sw_pix_fmt, and the
+    // pix_fmt be set to AV_PIX_FMT_HIP early. The sw_pix_fmt, and the
     // pix_fmt for non-accelerated transcoding, do not need to be correct
     // but need to be set to something.
     ret = ff_get_format(avctx, pix_fmts);
@@ -862,7 +854,7 @@ static av_cold int rocdec_decode_init(AVCodecContext *avctx)
                 return ret;
             }
         } else {
-            ret = av_hwdevice_ctx_create(&ctx->hwdevice, AV_HWDEVICE_TYPE_AMD_GPU, ctx->amd_gpu, NULL, 0);
+            ret = av_hwdevice_ctx_create(&ctx->hwdevice, AV_HWDEVICE_TYPE_HIP, ctx->gpu_id, NULL, 0);
             if (ret < 0) {
                 rocdec_decode_end(avctx);
                 return ret;
@@ -1037,7 +1029,7 @@ static void rocdec_flush(AVCodecContext *avctx)
 #define OFFSET(x) offsetof(RocdecContext, x)
 #define VD AV_OPT_FLAG_VIDEO_PARAM | AV_OPT_FLAG_DECODING_PARAM
 static const AVOption options[] = {
-    { "gpu",      "GPU to be used for decoding", OFFSET(amd_gpu), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, VD },
+    { "gpu",      "GPU to be used for decoding", OFFSET(gpu_id), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, VD },
     { "surfaces", "Maximum surfaces to be used for decoding", OFFSET(nb_surfaces), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, INT_MAX, VD | AV_OPT_FLAG_DEPRECATED },
     { "crop",     "Crop (top)x(bottom)x(left)x(right)", OFFSET(crop_expr), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, VD },
     { "resize",   "Resize (width)x(height)", OFFSET(resize_expr), AV_OPT_TYPE_STRING, { .str = NULL }, 0, 0, VD },
@@ -1047,11 +1039,11 @@ static const AVOption options[] = {
 static const AVCodecHWConfigInternal *const rocdec_hw_configs[] = {
     &(const AVCodecHWConfigInternal) {
         .public = {
-            .pix_fmt     = AV_PIX_FMT_AMD_GPU,
+            .pix_fmt     = AV_PIX_FMT_HIP,
             .methods     = AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX |
                            AV_CODEC_HW_CONFIG_METHOD_HW_FRAMES_CTX |
                            AV_CODEC_HW_CONFIG_METHOD_INTERNAL,
-            .device_type = AV_HWDEVICE_TYPE_AMD_GPU
+            .device_type = AV_HWDEVICE_TYPE_HIP
         },
         .hwaccel = NULL,
     },

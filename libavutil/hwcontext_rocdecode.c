@@ -74,7 +74,7 @@ static int rocdecode_frames_get_constraints(AVHWDeviceContext *ctx,
     if (!constraints->valid_hw_formats)
         return AVERROR(ENOMEM);
 
-    constraints->valid_hw_formats[0] = AV_PIX_FMT_AMD_GPU;
+    constraints->valid_hw_formats[0] = AV_PIX_FMT_HIP;
     constraints->valid_hw_formats[1] = AV_PIX_FMT_NONE;
 
     return 0;
@@ -167,7 +167,7 @@ static int rocdecode_get_buffer(AVHWFramesContext *ctx, AVFrame *frame)
         frame->data[1]     = frame->data[2] + frame->linesize[2] * (ctx->height / 2);
     }
 
-    frame->format = AV_PIX_FMT_AMD_GPU;
+    frame->format = AV_PIX_FMT_HIP;
     frame->width  = ctx->width;
     frame->height = ctx->height;
 
@@ -201,8 +201,8 @@ static int rocdecode_transfer_data(AVHWFramesContext *ctx, AVFrame *dst,
 
     int i, ret;
 
-    if ((src->hw_frames_ctx && ((AVHWFramesContext*)src->hw_frames_ctx->data)->format != AV_PIX_FMT_AMD_GPU) ||
-        (dst->hw_frames_ctx && ((AVHWFramesContext*)dst->hw_frames_ctx->data)->format != AV_PIX_FMT_AMD_GPU))
+    if ((src->hw_frames_ctx && ((AVHWFramesContext*)src->hw_frames_ctx->data)->format != AV_PIX_FMT_HIP) ||
+        (dst->hw_frames_ctx && ((AVHWFramesContext*)dst->hw_frames_ctx->data)->format != AV_PIX_FMT_HIP))
         return AVERROR(ENOSYS);
 
     for (i = 0; i < FF_ARRAY_ELEMS(src->data) && src->data[i]; i++) {
@@ -357,8 +357,8 @@ static int rocdecode_device_derive(AVHWDeviceContext *device_ctx,
     return 0;
 }
 
-const HWContextType ff_hwcontext_type_amd_gpu = {
-    .type                   = AV_HWDEVICE_TYPE_AMD_GPU,
+const HWContextType ff_hwcontext_type_hip = {
+    .type                   = AV_HWDEVICE_TYPE_HIP,
     .name                   = "ROCDECODE",
 
     .device_hwctx_size      = sizeof(RocDecodeDeviceContext),
@@ -375,5 +375,5 @@ const HWContextType ff_hwcontext_type_amd_gpu = {
     .transfer_data_to       = rocdecode_transfer_data,
     .transfer_data_from     = rocdecode_transfer_data,
 
-    .pix_fmts               = (const enum AVPixelFormat[]){ AV_PIX_FMT_AMD_GPU, AV_PIX_FMT_NONE },
+    .pix_fmts               = (const enum AVPixelFormat[]){ AV_PIX_FMT_HIP, AV_PIX_FMT_NONE },
 };

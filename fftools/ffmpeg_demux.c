@@ -1362,9 +1362,6 @@ static int ist_add(const OptionsContext *o, Demuxer *d, AVStream *st, AVDictiona
             // The NVDEC hwaccels use a CUDA device, so remap the name here.
             if (!strcmp(hwaccel, "nvdec") || !strcmp(hwaccel, "cuvid"))
                 hwaccel = "cuda";
-            if (!strcmp(hwaccel, "rocdec") || !strcmp(hwaccel, "amd_gpu"))
-                hwaccel = "amd_gpu";
-
             if (!strcmp(hwaccel, "none"))
                 ds->dec_opts.hwaccel_id = HWACCEL_NONE;
             else if (!strcmp(hwaccel, "auto"))
