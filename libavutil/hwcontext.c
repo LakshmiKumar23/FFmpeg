@@ -69,6 +69,9 @@ static const HWContextType * const hw_table[] = {
 #if CONFIG_AMF
     &ff_hwcontext_type_amf,
 #endif
+#if CONFIG_ROCDEC
+    &ff_hwcontext_type_hip,
+#endif
     NULL,
 };
 
@@ -86,6 +89,7 @@ static const char *const hw_type_names[] = {
     [AV_HWDEVICE_TYPE_MEDIACODEC] = "mediacodec",
     [AV_HWDEVICE_TYPE_VULKAN] = "vulkan",
     [AV_HWDEVICE_TYPE_AMF] = "amf",
+    [AV_HWDEVICE_TYPE_HIP] = "rocdec",
 };
 
 typedef struct FFHWDeviceContext {

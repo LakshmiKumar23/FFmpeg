@@ -17,7 +17,8 @@ version <next>:
 - APV parser
 - APV encoding support through a libopenapv wrapper
 - VVC decoder supports all content of SCC (Screen Content Coding):
-  IBC (Inter Block Copy), Palette Mode and ACT (Adaptive Color Transform
+  IBC (Inter Block Copy), Palette Mode and ACT (Adaptive Color Transform)
+- Adds AMD ROCm library, rocDecode as a hardware decoder option for H.265, H.264, AV1 and VP9
 
 
 version 7.1:

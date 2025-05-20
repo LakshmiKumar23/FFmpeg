@@ -35,6 +35,19 @@ package(amdgru-pro contains, but does not install automatically) are required.
 
 This driver can be installed using amdgpu-pro-install script in official amd driver archive.
 
+@section AMD ROCm rocDecode
+
+FFmpeg can use the AMD ROCm rocDecode library
+for accelerated H.264, HEVC, AV1 and VP9 decoding on hardware with Video Coding Next (VCN).
+
+To enable support you must obtain the rocDecode library header files(version 0.6.0+) from
+@url{https://github.com/ROCm/rocDecode.git}.
+
+To use this decoder on AMD devices, install ROCm and amdgpu-va drivers from the official site
+or from the script provided with rocDecode.
+
+Then configure FFmpeg with @code{--enable-rocdec}.
+
 @section AviSynth
 
 FFmpeg can read AviSynth scripts as input. To enable support, pass
