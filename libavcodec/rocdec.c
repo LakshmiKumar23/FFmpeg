@@ -97,8 +97,8 @@ typedef struct RocdecContext
 #define CHECK_ROCDECODE(x) FF_ROCDECODE_CHECK(x)
 #define CHECK_HIP(x) FF_HIP_CHECK(avctx, x)
 
-// Rocdecode recommends [2;4] range
-#define ROCDEC_MAX_DISPLAY_DELAY (4)
+// Rocdecode recommends 1
+#define ROCDEC_MAX_DISPLAY_DELAY (1)
 
 // Actual pool size will be determined by parser.
 #define ROCDEC_DEFAULT_NUM_SURFACES (ROCDEC_MAX_DISPLAY_DELAY + 1)
@@ -125,9 +125,10 @@ static int ROCDECAPI rocdec_handle_video_sequence(void *opaque, RocdecVideoForma
     memset(&rocdecinfo, 0, sizeof(rocdecinfo));
 
     ctx->internal_error = 0;
-
-    avctx->coded_width = rocdecinfo.width = format->coded_width;
-    avctx->coded_height = rocdecinfo.height = format->coded_height;
+    if (!ctx->rocdecdecoder) {
+        avctx->coded_width = rocdecinfo.width = format->coded_width;
+        avctx->coded_height = rocdecinfo.height = format->coded_height;
+    }
 
     // apply cropping
     rocdecinfo.display_rect.left = format->display_area.left + ctx->crop.left;
@@ -160,7 +161,10 @@ static int ROCDECAPI rocdec_handle_video_sequence(void *opaque, RocdecVideoForma
         case 0: // 8-bit
             if (chroma_444) {
                 pix_fmts[1] = AV_PIX_FMT_YUV444P;
-            } else {
+            } else if (format->chroma_format == rocDecVideoChromaFormat_422) {
+                pix_fmts[1] = AV_PIX_FMT_NV16;
+            }
+            else {
                 pix_fmts[1] = AV_PIX_FMT_NV12;
             }
             caps = &ctx->caps8;
@@ -309,11 +313,14 @@ static int ROCDECAPI rocdec_handle_video_sequence(void *opaque, RocdecVideoForma
     }
 
     old_nb_surfaces = ctx->nb_surfaces;
+    //printf("old_nb_surfaces = %d\n", old_nb_surfaces);
+    //printf("format->min_num_decode_surfaces -- %d\n", format->min_num_decode_surfaces);
     ctx->nb_surfaces = FFMAX(ctx->nb_surfaces, format->min_num_decode_surfaces + 3);
+    //printf("ctx->nb_surfaces = %d\n", ctx->nb_surfaces);
     if (avctx->extra_hw_frames > 0)
         ctx->nb_surfaces += avctx->extra_hw_frames;
-
     fifo_size_inc = ctx->nb_surfaces * fifo_size_mul - av_fifo_can_read(ctx->frame_queue) - av_fifo_can_write(ctx->frame_queue);
+    //printf("fifo_size_inc = %d\n", fifo_size_inc);
     if (fifo_size_inc > 0 && av_fifo_grow2(ctx->frame_queue, fifo_size_inc) < 0) {
         av_log(avctx, AV_LOG_ERROR, "Failed to grow frame queue on video sequence callback\n");
         ctx->internal_error = AVERROR(ENOMEM);
@@ -358,7 +365,8 @@ static int ROCDECAPI rocdec_handle_picture_decode(void *opaque, RocdecPicParams*
 {
     AVCodecContext *avctx = opaque;
     RocdecContext *ctx = avctx->priv_data;
-
+    av_log(avctx, AV_LOG_VERBOSE, "calling rocdec_handle_picture_decode, \
+            avctx->coded_width - %d\n", avctx->coded_width);
     if(picparams->intra_pic_flag)
         ctx->key_frame[picparams->curr_pic_idx] = picparams->intra_pic_flag;
 
@@ -374,11 +382,14 @@ static int ROCDECAPI rocdec_handle_picture_display(void *opaque, RocdecParserDis
     AVCodecContext *avctx = opaque;
     RocdecContext *ctx = avctx->priv_data;
     ctx->internal_error = 0;
-
+    //av_log(avctx, AV_LOG_VERBOSE, "calling rocdec_handle_picture_display, picture index - %d\n", dispinfo->picture_index);
     // For some reason, dispinfo->progressive_frame is sometimes wrong.
     dispinfo->progressive_frame = ctx->progressive_sequence;
 
-    av_fifo_write(ctx->frame_queue, dispinfo, 1);
+    int ret = av_fifo_write(ctx->frame_queue, dispinfo, 1);
+    if (ret < 0) {
+        av_log(avctx, AV_LOG_ERROR, "failed to write to av_fifo\n");
+    }
 
     return 1;
 }
@@ -387,10 +398,9 @@ static int rocdec_is_buffer_full(AVCodecContext *avctx)
 {
     RocdecContext *ctx = avctx->priv_data;
 
-    int shift = 0;
-
+    // TODO: Do I need to shift? 
     // shift/divide frame count to ensure the buffer is still signalled full if one half-frame has already been returned when deinterlacing.
-    return ((av_fifo_can_read(ctx->frame_queue) + shift) >> shift) + ctx->rocdec_parse_info.max_display_delay >= ctx->nb_surfaces;
+    return (av_fifo_can_read(ctx->frame_queue));
 }
 
 static int rocdec_decode_packet(AVCodecContext *avctx, const AVPacket *avpkt)
@@ -413,10 +423,11 @@ static int rocdec_decode_packet(AVCodecContext *avctx, const AVPacket *avpkt)
 
         if (avpkt->pts != AV_NOPTS_VALUE) {
             rocdec_pkt.flags = ROCDEC_PKT_TIMESTAMP;
-            if (avctx->pkt_timebase.num && avctx->pkt_timebase.den)
+            /*if (avctx->pkt_timebase.num && avctx->pkt_timebase.den)
                 rocdec_pkt.pts = av_rescale_q(avpkt->pts, avctx->pkt_timebase, (AVRational){1, 10000000});
             else
                 rocdec_pkt.pts = avpkt->pts;
+            */
         }
     } else {
         rocdec_pkt.flags = ROCDEC_PKT_ENDOFSTREAM;
@@ -453,6 +464,7 @@ static int rocdec_output_frame(AVCodecContext *avctx, AVFrame *frame)
     RocdecParserDispInfo parsed_frame;
     int ret = 0;
 
+    //av_log(avctx, AV_LOG_VERBOSE, "calling rocdec_output_frame\n");
     if (ctx->decoder_flushing) {
         ret = rocdec_decode_packet(avctx, NULL);
         if (ret < 0 && ret != AVERROR_EOF)
@@ -538,6 +550,7 @@ static int rocdec_output_frame(AVCodecContext *avctx, AVFrame *frame)
         } else if (avctx->pix_fmt == AV_PIX_FMT_NV12      ||
                    avctx->pix_fmt == AV_PIX_FMT_P010      ||
                    avctx->pix_fmt == AV_PIX_FMT_P016      ||
+                   avctx->pix_fmt == AV_PIX_FMT_NV16      ||
                    avctx->pix_fmt == AV_PIX_FMT_YUV444P   ||
                    avctx->pix_fmt == AV_PIX_FMT_YUV444P16) {
             AVFrame *tmp_frame = av_frame_alloc();
@@ -608,21 +621,22 @@ static int rocdec_output_frame(AVCodecContext *avctx, AVFrame *frame)
 
         frame->width = avctx->width;
         frame->height = avctx->height;
-        if (avctx->pkt_timebase.num && avctx->pkt_timebase.den)
+        /*if (avctx->pkt_timebase.num && avctx->pkt_timebase.den)
             frame->pts = av_rescale_q(parsed_frame.pts, (AVRational){1, 10000000}, avctx->pkt_timebase);
         else
             frame->pts = parsed_frame.pts;
-
+        */
         /* Opaque reordering breaks the internal pkt logic.
          * So set pkt_pts and clear all the other pkt_ fields.
          */
         frame->duration = 0;
 
-        if (!parsed_frame.progressive_frame)
+        /*if (!parsed_frame.progressive_frame)
             frame->flags |= AV_FRAME_FLAG_INTERLACED;
 
         if ((frame->flags & AV_FRAME_FLAG_INTERLACED) && parsed_frame.top_field_first)
             frame->flags |= AV_FRAME_FLAG_TOP_FIELD_FIRST;
+        */
     } else if (ctx->decoder_flushing) {
         ret = AVERROR_EOF;
     } else {
@@ -773,7 +787,7 @@ static av_cold int rocdec_decode_init(AVCodecContext *avctx)
             pix_fmts[1] = is_yuv444 ? AV_PIX_FMT_YUV444P16 : AV_PIX_FMT_P016;
             break;
         default:
-            pix_fmts[1] = is_yuv444 ? AV_PIX_FMT_YUV444P : AV_PIX_FMT_NV12;
+            pix_fmts[1] = is_yuv444 ? AV_PIX_FMT_YUV444P : (is_yuv422 ? AV_PIX_FMT_NV16 : AV_PIX_FMT_NV12);
             break;
     }
 

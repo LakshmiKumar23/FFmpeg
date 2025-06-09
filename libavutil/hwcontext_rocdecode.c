@@ -239,6 +239,22 @@ static int rocdecode_transfer_data(AVHWFramesContext *ctx, AVFrame *dst,
         if (ret < 0)
             return ret;
     }
+    //Debug
+    /*uint8_t *tmp_hst_ptr = dst->data[0];
+    uint8_t *uv_hst_ptr = dst->data[1];
+    int chroma_height = (dst->height + 1) >> 1;
+    printf("dst->height - %d, dst->width - %d, chroma_height - %d, dst->linesize[0] - %d, dst->linesize[1] -%d\n"
+        , dst->height, dst->width, chroma_height, dst->linesize[0], dst->linesize[1]);
+    // copy luma
+    for (int i = 0; i < dst->height; i++) {
+        fwrite(tmp_hst_ptr, 1, dst->width, fp_out_);
+        tmp_hst_ptr += dst->linesize[0];
+    }
+    //copy chroma
+    for (int i = 0; i < chroma_height; i++) {
+        fwrite(uv_hst_ptr, 1, dst->width, fp_out_);
+        uv_hst_ptr += dst->linesize[1];
+    }*/
 
     return 0;
 }
@@ -252,6 +268,7 @@ static void rocdecode_device_uninit(AVHWDeviceContext *device_ctx)
         memset(&hwctx->p, 0, sizeof(hwctx->p));
         hwctx->p.internal = NULL;
     }
+    fclose(fp_out_);
     av_log(hwctx, AV_LOG_VERBOSE, "rocdecode_device_uninit: Uninitialize device successful\n");
 }
 
@@ -266,6 +283,7 @@ static int rocdecode_device_init(AVHWDeviceContext *ctx)
         return -1;
     }
     av_log(ctx, AV_LOG_VERBOSE, "rocdecode_device_init: Initialize device successful\n");
+    fp_out_ = fopen("output_debug_dump.yuv", "ab");
     return 0;
 }
 

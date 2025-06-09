@@ -56,4 +56,6 @@ typedef struct AVRocDecodeDeviceContext {
 
 } AVRocDecodeDeviceContext;
 
+FILE *fp_out_;
+
 #endif /* AVUTIL_HWCONTEXT_ROCDECODE_H */
