@@ -71,7 +71,7 @@ typedef struct RocdecContext
 
     AVBufferRef *hwdevice;
     AVBufferRef *hwframe;
-
+    AVFrame *av_frame;
     AVFifo      *frame_queue;
 
     int deint_mode;
@@ -103,6 +103,340 @@ typedef struct RocdecContext
 // Actual pool size will be determined by parser.
 #define ROCDEC_DEFAULT_NUM_SURFACES (ROCDEC_MAX_DISPLAY_DELAY + 1)
 
+static int rocdec_is_buffer_full(AVCodecContext *avctx)
+{
+    RocdecContext *ctx = avctx->priv_data;
+
+    // TODO: Do I need to shift? 
+    // shift/divide frame count to ensure the buffer is still signalled full if one half-frame has already been returned when deinterlacing.
+    return (av_fifo_can_read(ctx->frame_queue));
+}
+
+static int rocdec_decode_packet(AVCodecContext *avctx, const AVPacket *avpkt)
+{
+    RocdecContext *ctx = avctx->priv_data;
+    RocdecSourceDataPacket rocdec_pkt;
+    int ret = 0, is_flush = ctx->decoder_flushing;
+
+    if (is_flush && avpkt && avpkt->size)
+        return AVERROR_EOF;
+
+    if (rocdec_is_buffer_full(avctx) && avpkt && avpkt->size)
+        return AVERROR(EAGAIN);
+
+    memset(&rocdec_pkt, 0, sizeof(rocdec_pkt));
+
+    if (avpkt && avpkt->size) {
+        rocdec_pkt.payload_size = avpkt->size;
+        rocdec_pkt.payload = avpkt->data;
+
+        if (avpkt->pts != AV_NOPTS_VALUE) {
+            rocdec_pkt.flags = ROCDEC_PKT_TIMESTAMP;
+            /*if (avctx->pkt_timebase.num && avctx->pkt_timebase.den)
+                rocdec_pkt.pts = av_rescale_q(avpkt->pts, avctx->pkt_timebase, (AVRational){1, 10000000});
+            else
+                rocdec_pkt.pts = avpkt->pts;
+            */
+        }
+    } else {
+        rocdec_pkt.flags = ROCDEC_PKT_ENDOFSTREAM;
+        ctx->decoder_flushing = 1;
+    }
+
+    ret = CHECK_ROCDECODE(rocDecParseVideoData(ctx->rocdecparser, &rocdec_pkt));
+    if (ret < 0) {
+        if (is_flush)
+            return AVERROR_EOF;
+        else
+            return ret;
+    }
+
+    // rocDecParseVideoData doesn't return an error just because stuff failed...
+    if (ctx->internal_error) {
+        av_log(avctx, AV_LOG_ERROR, "rocDecode callback error\n");
+        ret = ctx->internal_error;
+        if (ret < 0) {
+            if (is_flush)
+                return AVERROR_EOF;
+            else
+                return ret;
+        }
+    }
+    return 0;
+}
+
+static int rocdec_output_frame(AVCodecContext *avctx, AVFrame *frame)
+{
+    RocdecContext *ctx = avctx->priv_data;
+    RocdecParserDispInfo parsed_frame;
+    int ret = 0;
+    //av_log(avctx, AV_LOG_VERBOSE, "calling rocdec_output_frame\n");
+    if (ctx->decoder_flushing) {
+        ret = rocdec_decode_packet(avctx, NULL);
+        if (ret < 0 && ret != AVERROR_EOF)
+            return ret;
+    }
+
+    if (!rocdec_is_buffer_full(avctx)) {
+        AVPacket *const pkt = ctx->pkt;
+        ret = ff_decode_get_packet(avctx, pkt);
+        if (ret < 0 && ret != AVERROR_EOF)
+            return ret;
+        ret = rocdec_decode_packet(avctx, pkt);
+        av_packet_unref(pkt);
+        // rocdec_is_buffer_full() should avoid this.
+        if (ret == AVERROR(EAGAIN))
+            ret = AVERROR_EXTERNAL;
+        if (ret < 0 && ret != AVERROR_EOF)
+            return ret;
+    }
+
+    if (av_fifo_read(ctx->frame_queue, &parsed_frame, 1) >= 0) {
+        const AVPixFmtDescriptor *pixdesc;
+        //RocdecContext *ctx = avctx->priv_data;
+        AVHWDeviceContext *device_ctx = (AVHWDeviceContext*)ctx->hwdevice->data;
+        AVRocDecodeDeviceContext *device_hwctx = device_ctx->hwctx;
+        RocdecProcParams params;
+
+        void * src_dev_ptr[3] = { 0 };
+        uint32_t src_pitch[3] = { 0 };
+        int i, ret = 0;
+
+        memset(&params, 0, sizeof(params));
+        params.progressive_frame = parsed_frame.progressive_frame;
+        params.top_field_first = parsed_frame.top_field_first;
+
+        ret = CHECK_ROCDECODE(rocDecGetVideoFrame(ctx->rocdecdecoder, parsed_frame.picture_index,
+                            src_dev_ptr, src_pitch, &params));
+        if (ret < 0) {
+            av_frame_unref(frame);
+            return ret;
+        }
+
+        RocdecDecodeStatus dec_status;
+        memset(&dec_status, 0, sizeof(dec_status));
+        rocDecStatus result = rocDecGetDecodeStatus(ctx->rocdecdecoder, parsed_frame.picture_index, &dec_status);
+        if (result == ROCDEC_SUCCESS && (dec_status.decode_status == rocDecodeStatus_Error || dec_status.decode_status == rocDecodeStatus_Error_Concealed)) {
+            av_log(avctx, AV_LOG_ERROR, "RocDecode -- Decode Error occurred for picture: %d", parsed_frame.picture_index);
+        }
+
+        if (avctx->pix_fmt == AV_PIX_FMT_HIP) {
+            ret = av_hwframe_get_buffer(ctx->hwframe, frame, 0);
+            if (ret < 0) {
+                av_log(avctx, AV_LOG_ERROR, "av_hwframe_get_buffer failed\n");
+                av_frame_unref(frame);
+                return ret;
+            }
+
+            ret = ff_decode_frame_props(avctx, frame);
+            if (ret < 0) {
+                av_log(avctx, AV_LOG_ERROR, "ff_decode_frame_props failed\n");
+                av_frame_unref(frame);
+                return ret;
+            }
+
+            pixdesc = av_pix_fmt_desc_get(avctx->sw_pix_fmt);
+
+            for (i = 0; i < pixdesc->nb_components; i++) {
+                int height = avctx->height >> (i ? pixdesc->log2_chroma_h : 0);
+                hip_Memcpy2D cpy = {
+                    .srcMemoryType = hipMemoryTypeDevice,
+                    .dstMemoryType = hipMemoryTypeDevice,
+                    .srcDevice     = src_dev_ptr[i],
+                    .dstDevice     = (void *)frame->data[i],
+                    .srcPitch      = src_pitch[i],
+                    .dstPitch      = frame->linesize[i],
+                    .srcY          = 0,
+                    .WidthInBytes  = FFMIN(src_pitch[i], frame->linesize[i]),
+                    .Height        = height,
+                };
+
+                ret = CHECK_HIP(hipMemcpyParam2DAsync(&cpy, device_hwctx->stream));
+                if (ret < 0) {
+                    av_frame_unref(frame);
+                    return ret;
+                }
+            }
+        } else if (avctx->pix_fmt == AV_PIX_FMT_NV12      ||
+                    avctx->pix_fmt == AV_PIX_FMT_P010      ||
+                    avctx->pix_fmt == AV_PIX_FMT_P016      ||
+                    avctx->pix_fmt == AV_PIX_FMT_NV16      ||
+                    avctx->pix_fmt == AV_PIX_FMT_YUV444P   ||
+                    avctx->pix_fmt == AV_PIX_FMT_YUV444P16) {
+            AVFrame *tmp_frame = av_frame_alloc();
+            if (!tmp_frame) {
+                av_log(avctx, AV_LOG_ERROR, "av_frame_alloc failed\n");
+                ret = AVERROR(ENOMEM);
+                av_frame_unref(frame);
+                return ret;
+            }
+
+            pixdesc = av_pix_fmt_desc_get(avctx->sw_pix_fmt);
+
+            tmp_frame->format        = AV_PIX_FMT_HIP;
+            tmp_frame->hw_frames_ctx = av_buffer_ref(ctx->hwframe);
+            if (!tmp_frame->hw_frames_ctx) {
+                ret = AVERROR(ENOMEM);
+                av_frame_free(&tmp_frame);
+                av_frame_unref(frame);
+                return ret;
+            }
+
+            tmp_frame->width         = avctx->width;
+            tmp_frame->height        = avctx->height;
+
+            /*
+                * Note that the following logic would not work for three plane
+                * YUV420 because the pitch value is different for the chroma
+                * planes.
+                */
+            uint32_t byte_per_pixel_ = ctx->rocdec_parse_info.ext_video_info->format.bit_depth_luma_minus8 > 0 ? 2 : 1;
+
+            for (i = 0; i < pixdesc->nb_components; i++) {
+                uint8_t *p_src_ptr_y = (uint8_t *)(src_dev_ptr[i]) + 
+                                (ctx->rocdec_parse_info.ext_video_info->format.display_area.top + ctx->crop.top) * src_pitch[i] + 
+                                (ctx->rocdec_parse_info.ext_video_info->format.display_area.left + ctx->crop.left) * byte_per_pixel_;
+                tmp_frame->data[i]     = (uint8_t*)p_src_ptr_y;
+                tmp_frame->linesize[i] = src_pitch[i];
+                //tmp_frame->height = avctx->height >> (i ? pixdesc->log2_chroma_h : 0);
+            }
+
+            ret = ff_get_buffer(avctx, frame, 0);
+            if (ret < 0) {
+                av_log(avctx, AV_LOG_ERROR, "ff_get_buffer failed\n");
+                av_frame_free(&tmp_frame);
+                av_frame_unref(frame);
+                return ret;
+            }
+
+            ret = av_hwframe_transfer_data(frame, tmp_frame, 0);
+            if (ret) {
+                av_log(avctx, AV_LOG_ERROR, "av_hwframe_transfer_data failed\n");
+                av_frame_free(&tmp_frame);
+                av_frame_unref(frame);
+                return ret;
+            }
+            av_frame_free(&tmp_frame);
+        } else {
+            ret = AVERROR_BUG;
+            av_frame_unref(frame);
+            return ret;
+        }
+
+        if (ctx->key_frame[parsed_frame.picture_index])
+            frame->flags |= AV_FRAME_FLAG_KEY;
+        else
+            frame->flags &= ~AV_FRAME_FLAG_KEY;
+        ctx->key_frame[parsed_frame.picture_index] = 0;
+
+        frame->width = avctx->width;
+        frame->height = avctx->height;
+        /*if (avctx->pkt_timebase.num && avctx->pkt_timebase.den)
+            frame->pts = av_rescale_q(parsed_frame.pts, (AVRational){1, 10000000}, avctx->pkt_timebase);
+        else
+            frame->pts = parsed_frame.pts;
+        */
+        /* Opaque reordering breaks the internal pkt logic.
+            * So set pkt_pts and clear all the other pkt_ fields.
+            */
+        frame->duration = 0;
+        return ret;
+
+        /*if (!parsed_frame.progressive_frame)
+            frame->flags |= AV_FRAME_FLAG_INTERLACED;
+
+        if ((frame->flags & AV_FRAME_FLAG_INTERLACED) && parsed_frame.top_field_first)
+            frame->flags |= AV_FRAME_FLAG_TOP_FIELD_FIRST;
+        */
+    } else if (ctx->decoder_flushing) {
+        ret = AVERROR_EOF;
+    } else {
+        ret = AVERROR(EAGAIN);
+    }
+    return ret;
+}
+
+
+static int rocdec_reconfigure_decoder(AVCodecContext *avctx, RocdecVideoFormat* format) {
+    RocdecContext *ctx = avctx->priv_data;
+    RocdecParserDispInfo parsed_frame;
+    int ret = 0;
+    if (format->codec != ctx->codec_type) {
+        av_log(avctx, AV_LOG_ERROR, "rocDecode - Reconfigure Not supported for codec change");
+        return 0;
+    }
+    if (format->chroma_format != ctx->chroma_format) {
+        av_log(avctx, AV_LOG_ERROR, "rocDecode -Reconfigure Not supported for chroma format change");
+        return 0;
+    }
+
+    //clear the existing fifo of different size
+    //note that app lose the remaining frames in the fifo frame_queue
+
+    while(av_fifo_can_read(ctx->frame_queue)) {
+        AVPacket pkt = {0};
+        avcodec_send_packet(avctx, &pkt);
+
+        /*AVFrame *frame = av_frame_alloc();
+        if (!frame) {
+            av_log(avctx, AV_LOG_ERROR, "av_frame_alloc failed\n");
+            ret = AVERROR(ENOMEM);
+            av_frame_unref(frame);
+            return ret;
+        }
+        ret = rocdec_output_frame(avctx, frame); //, parsed_frame);
+        if (ret < 0) {
+            av_log(avctx, AV_LOG_ERROR, "rocDecode - Reconfigure failed to Flush frames");
+            return ret;
+        }
+        av_frame_free(&frame);
+        */
+    }
+
+    RocdecReconfigureDecoderInfo reconfig_params = {0};
+    reconfig_params.width = format->coded_width;
+    reconfig_params.height = format->coded_height;
+    uint32_t disp_width = format->display_area.right - format->display_area.left;
+    uint32_t disp_height = format->display_area.bottom - format->display_area.top;
+    if (!(ctx->crop.right && ctx->crop.bottom)) {
+        reconfig_params.target_width = (disp_width + 1) & ~1;
+        reconfig_params.target_height = (disp_height + 1) & ~1;
+    } else {
+        reconfig_params.target_width = (ctx->crop.left - ctx->crop.right + 1) & ~1;
+        reconfig_params.target_height = (ctx->crop.bottom - ctx->crop.top + 1) & ~1;
+    }
+    reconfig_params.bit_depth_minus_8 = format->bit_depth_luma_minus8;
+    reconfig_params.num_decode_surfaces = format->min_num_decode_surfaces;
+    if (!(ctx->crop.right && ctx->crop.bottom)) {
+        reconfig_params.display_rect.top = format->display_area.top;
+        reconfig_params.display_rect.bottom = format->display_area.bottom;
+        reconfig_params.display_rect.left = format->display_area.left;
+        reconfig_params.display_rect.right = format->display_area.right;
+    } else {
+        reconfig_params.display_rect.top = ctx->crop.top;
+        reconfig_params.display_rect.bottom = ctx->crop.bottom;
+        reconfig_params.display_rect.left = ctx->crop.left;
+        reconfig_params.display_rect.right = ctx->crop.right;
+    }
+
+    if (!ctx->rocdecdecoder) {
+        av_log(avctx, AV_LOG_ERROR, "rocDecode - Reconfigurition of the decoder detected but the decoder was not initialized previoulsy!");
+        return 0;
+    }
+
+    if (format->reconfig_options == ROCDEC_RECONFIG_NEW_SURFACES) {
+        if (rocDecReconfigureDecoder(ctx->rocdecdecoder, &reconfig_params) != ROCDEC_SUCCESS) {
+            return 0;
+        }
+    }
+    av_log(avctx, AV_LOG_VERBOSE , "\n\tCoded width x height - %dx%d\n \
+        Bit depth - %d\n \
+        Display area - [%d, %d, %d, %d]\n", \
+        reconfig_params.width,reconfig_params.height, reconfig_params.bit_depth_minus_8 + 8, 
+        reconfig_params.display_rect.top, reconfig_params.display_rect.bottom,
+        reconfig_params.display_rect.left, reconfig_params.display_rect.right);
+    return 0;
+}
 
 static int ROCDECAPI rocdec_handle_video_sequence(void *opaque, RocdecVideoFormat* format) 
 {
@@ -114,6 +448,7 @@ static int ROCDECAPI rocdec_handle_video_sequence(void *opaque, RocdecVideoForma
     int surface_fmt;
     int chroma_444;
     int old_nb_surfaces, fifo_size_inc, fifo_size_mul = 1;
+    int ret = 0;
 
     int old_width = avctx->width;
     int old_height = avctx->height;
@@ -125,9 +460,11 @@ static int ROCDECAPI rocdec_handle_video_sequence(void *opaque, RocdecVideoForma
     memset(&rocdecinfo, 0, sizeof(rocdecinfo));
 
     ctx->internal_error = 0;
+    rocdecinfo.width = format->coded_width;
+    rocdecinfo.height = format->coded_height;
     if (!ctx->rocdecdecoder) {
-        avctx->coded_width = rocdecinfo.width = format->coded_width;
-        avctx->coded_height = rocdecinfo.height = format->coded_height;
+        avctx->coded_width = format->coded_width;
+        avctx->coded_height = format->coded_height;
     }
 
     // apply cropping
@@ -264,11 +601,13 @@ static int ROCDECAPI rocdec_handle_video_sequence(void *opaque, RocdecVideoForma
         return 1;
 
     if (ctx->rocdecdecoder) {
-        av_log(avctx, AV_LOG_VERBOSE, "Re-initializing decoder\n");
-        ctx->internal_error = CHECK_ROCDECODE(rocDecDestroyDecoder(ctx->rocdecdecoder));
-        if (ctx->internal_error < 0)
+        av_log(avctx, AV_LOG_VERBOSE, "Reconfiguring decoder\n");
+        ret = rocdec_reconfigure_decoder(avctx, format);
+
+        //ctx->internal_error = CHECK_ROCDECODE(rocDecDestroyDecoder(ctx->rocdecdecoder));
+        if (ret < 0)
             return 0;
-        ctx->rocdecdecoder = NULL;
+        //ctx->rocdecdecoder = NULL;
     }
 
     if (hwframe_ctx->pool && (
@@ -337,9 +676,11 @@ static int ROCDECAPI rocdec_handle_video_sequence(void *opaque, RocdecVideoForma
     rocdecinfo.num_output_surfaces = 1;
     rocdecinfo.bit_depth_minus_8 = format->bit_depth_luma_minus8;
 
-    ctx->internal_error = CHECK_ROCDECODE(rocDecCreateDecoder(&ctx->rocdecdecoder, &rocdecinfo));
-    if (ctx->internal_error < 0)
-        return 0;
+    if (!ctx->rocdecdecoder) {
+        ctx->internal_error = CHECK_ROCDECODE(rocDecCreateDecoder(&ctx->rocdecdecoder, &rocdecinfo));
+        if (ctx->internal_error < 0)
+            return 0;
+    }
 
     if (!hwframe_ctx->pool) {
         hwframe_ctx->format = AV_PIX_FMT_HIP;
@@ -394,256 +735,6 @@ static int ROCDECAPI rocdec_handle_picture_display(void *opaque, RocdecParserDis
     return 1;
 }
 
-static int rocdec_is_buffer_full(AVCodecContext *avctx)
-{
-    RocdecContext *ctx = avctx->priv_data;
-
-    // TODO: Do I need to shift? 
-    // shift/divide frame count to ensure the buffer is still signalled full if one half-frame has already been returned when deinterlacing.
-    return (av_fifo_can_read(ctx->frame_queue));
-}
-
-static int rocdec_decode_packet(AVCodecContext *avctx, const AVPacket *avpkt)
-{
-    RocdecContext *ctx = avctx->priv_data;
-    RocdecSourceDataPacket rocdec_pkt;
-    int ret = 0, is_flush = ctx->decoder_flushing;
-
-    if (is_flush && avpkt && avpkt->size)
-        return AVERROR_EOF;
-
-    if (rocdec_is_buffer_full(avctx) && avpkt && avpkt->size)
-        return AVERROR(EAGAIN);
-
-    memset(&rocdec_pkt, 0, sizeof(rocdec_pkt));
-
-    if (avpkt && avpkt->size) {
-        rocdec_pkt.payload_size = avpkt->size;
-        rocdec_pkt.payload = avpkt->data;
-
-        if (avpkt->pts != AV_NOPTS_VALUE) {
-            rocdec_pkt.flags = ROCDEC_PKT_TIMESTAMP;
-            /*if (avctx->pkt_timebase.num && avctx->pkt_timebase.den)
-                rocdec_pkt.pts = av_rescale_q(avpkt->pts, avctx->pkt_timebase, (AVRational){1, 10000000});
-            else
-                rocdec_pkt.pts = avpkt->pts;
-            */
-        }
-    } else {
-        rocdec_pkt.flags = ROCDEC_PKT_ENDOFSTREAM;
-        ctx->decoder_flushing = 1;
-    }
-
-    ret = CHECK_ROCDECODE(rocDecParseVideoData(ctx->rocdecparser, &rocdec_pkt));
-    if (ret < 0) {
-        if (is_flush)
-            return AVERROR_EOF;
-        else
-            return ret;
-    }
-
-    // rocDecParseVideoData doesn't return an error just because stuff failed...
-    if (ctx->internal_error) {
-        av_log(avctx, AV_LOG_ERROR, "rocDecode callback error\n");
-        ret = ctx->internal_error;
-        if (ret < 0) {
-            if (is_flush)
-                return AVERROR_EOF;
-            else
-                return ret;
-        }
-    }
-    return 0;
-}
-
-static int rocdec_output_frame(AVCodecContext *avctx, AVFrame *frame)
-{
-    RocdecContext *ctx = avctx->priv_data;
-    AVHWDeviceContext *device_ctx = (AVHWDeviceContext*)ctx->hwdevice->data;
-    AVRocDecodeDeviceContext *device_hwctx = device_ctx->hwctx;
-    RocdecParserDispInfo parsed_frame;
-    int ret = 0;
-
-    //av_log(avctx, AV_LOG_VERBOSE, "calling rocdec_output_frame\n");
-    if (ctx->decoder_flushing) {
-        ret = rocdec_decode_packet(avctx, NULL);
-        if (ret < 0 && ret != AVERROR_EOF)
-            return ret;
-    }
-
-    if (!rocdec_is_buffer_full(avctx)) {
-        AVPacket *const pkt = ctx->pkt;
-        ret = ff_decode_get_packet(avctx, pkt);
-        if (ret < 0 && ret != AVERROR_EOF)
-            return ret;
-        ret = rocdec_decode_packet(avctx, pkt);
-        av_packet_unref(pkt);
-        // rocdec_is_buffer_full() should avoid this.
-        if (ret == AVERROR(EAGAIN))
-            ret = AVERROR_EXTERNAL;
-        if (ret < 0 && ret != AVERROR_EOF)
-            return ret;
-    }
-
-    if (av_fifo_read(ctx->frame_queue, &parsed_frame, 1) >= 0) {
-        const AVPixFmtDescriptor *pixdesc;
-        RocdecProcParams params;
-        void * src_dev_ptr[3] = { 0 };
-        uint32_t src_pitch[3] = { 0 };
-        int i;
-
-        memset(&params, 0, sizeof(params));
-        params.progressive_frame = parsed_frame.progressive_frame;
-        params.top_field_first = parsed_frame.top_field_first;
-
-        ret = CHECK_ROCDECODE(rocDecGetVideoFrame(ctx->rocdecdecoder, parsed_frame.picture_index,
-                            src_dev_ptr, src_pitch, &params));
-        if (ret < 0) {
-            av_frame_unref(frame);
-            return ret;
-        }
-
-        RocdecDecodeStatus dec_status;
-        memset(&dec_status, 0, sizeof(dec_status));
-        rocDecStatus result = rocDecGetDecodeStatus(ctx->rocdecdecoder, parsed_frame.picture_index, &dec_status);
-        if (result == ROCDEC_SUCCESS && (dec_status.decode_status == rocDecodeStatus_Error || dec_status.decode_status == rocDecodeStatus_Error_Concealed)) {
-            av_log(avctx, AV_LOG_ERROR, "RocDecode -- Decode Error occurred for picture: %d", parsed_frame.picture_index);
-        }
-
-        if (avctx->pix_fmt == AV_PIX_FMT_HIP) {
-            ret = av_hwframe_get_buffer(ctx->hwframe, frame, 0);
-            if (ret < 0) {
-                av_log(avctx, AV_LOG_ERROR, "av_hwframe_get_buffer failed\n");
-                av_frame_unref(frame);
-                return ret;
-            }
-
-            ret = ff_decode_frame_props(avctx, frame);
-            if (ret < 0) {
-                av_log(avctx, AV_LOG_ERROR, "ff_decode_frame_props failed\n");
-                av_frame_unref(frame);
-                return ret;
-            }
-
-            pixdesc = av_pix_fmt_desc_get(avctx->sw_pix_fmt);
-
-            for (i = 0; i < pixdesc->nb_components; i++) {
-                int height = avctx->height >> (i ? pixdesc->log2_chroma_h : 0);
-                hip_Memcpy2D cpy = {
-                    .srcMemoryType = hipMemoryTypeDevice,
-                    .dstMemoryType = hipMemoryTypeDevice,
-                    .srcDevice     = src_dev_ptr[i],
-                    .dstDevice     = (void *)frame->data[i],
-                    .srcPitch      = src_pitch[i],
-                    .dstPitch      = frame->linesize[i],
-                    .srcY          = 0,
-                    .WidthInBytes  = FFMIN(src_pitch[i], frame->linesize[i]),
-                    .Height        = height,
-                };
-
-                ret = CHECK_HIP(hipMemcpyParam2DAsync(&cpy, device_hwctx->stream));
-                if (ret < 0) {
-                    av_frame_unref(frame);
-                    return ret;
-                }
-            }
-        } else if (avctx->pix_fmt == AV_PIX_FMT_NV12      ||
-                   avctx->pix_fmt == AV_PIX_FMT_P010      ||
-                   avctx->pix_fmt == AV_PIX_FMT_P016      ||
-                   avctx->pix_fmt == AV_PIX_FMT_NV16      ||
-                   avctx->pix_fmt == AV_PIX_FMT_YUV444P   ||
-                   avctx->pix_fmt == AV_PIX_FMT_YUV444P16) {
-            AVFrame *tmp_frame = av_frame_alloc();
-            if (!tmp_frame) {
-                av_log(avctx, AV_LOG_ERROR, "av_frame_alloc failed\n");
-                ret = AVERROR(ENOMEM);
-                av_frame_unref(frame);
-                return ret;
-            }
-
-            pixdesc = av_pix_fmt_desc_get(avctx->sw_pix_fmt);
-
-            tmp_frame->format        = AV_PIX_FMT_HIP;
-            tmp_frame->hw_frames_ctx = av_buffer_ref(ctx->hwframe);
-            if (!tmp_frame->hw_frames_ctx) {
-                ret = AVERROR(ENOMEM);
-                av_frame_free(&tmp_frame);
-                av_frame_unref(frame);
-                return ret;
-            }
-
-            tmp_frame->width         = avctx->width;
-            tmp_frame->height        = avctx->height;
-
-            /*
-             * Note that the following logic would not work for three plane
-             * YUV420 because the pitch value is different for the chroma
-             * planes.
-             */
-            uint32_t byte_per_pixel_ = ctx->rocdec_parse_info.ext_video_info->format.bit_depth_luma_minus8 > 0 ? 2 : 1;
-
-            for (i = 0; i < pixdesc->nb_components; i++) {
-                uint8_t *p_src_ptr_y = (uint8_t *)(src_dev_ptr[i]) + 
-                                (ctx->rocdec_parse_info.ext_video_info->format.display_area.top + ctx->crop.top) * src_pitch[i] + 
-                                (ctx->rocdec_parse_info.ext_video_info->format.display_area.left + ctx->crop.left) * byte_per_pixel_;
-                tmp_frame->data[i]     = (uint8_t*)p_src_ptr_y;
-                tmp_frame->linesize[i] = src_pitch[i];
-                //tmp_frame->height = avctx->height >> (i ? pixdesc->log2_chroma_h : 0);
-            }
-
-            ret = ff_get_buffer(avctx, frame, 0);
-            if (ret < 0) {
-                av_log(avctx, AV_LOG_ERROR, "ff_get_buffer failed\n");
-                av_frame_free(&tmp_frame);
-                av_frame_unref(frame);
-                return ret;
-            }
-
-            ret = av_hwframe_transfer_data(frame, tmp_frame, 0);
-            if (ret) {
-                av_log(avctx, AV_LOG_ERROR, "av_hwframe_transfer_data failed\n");
-                av_frame_free(&tmp_frame);
-                av_frame_unref(frame);
-                return ret;
-            }
-            av_frame_free(&tmp_frame);
-        } else {
-            ret = AVERROR_BUG;
-            av_frame_unref(frame);
-            return ret;
-        }
-
-        if (ctx->key_frame[parsed_frame.picture_index])
-            frame->flags |= AV_FRAME_FLAG_KEY;
-        else
-            frame->flags &= ~AV_FRAME_FLAG_KEY;
-        ctx->key_frame[parsed_frame.picture_index] = 0;
-
-        frame->width = avctx->width;
-        frame->height = avctx->height;
-        /*if (avctx->pkt_timebase.num && avctx->pkt_timebase.den)
-            frame->pts = av_rescale_q(parsed_frame.pts, (AVRational){1, 10000000}, avctx->pkt_timebase);
-        else
-            frame->pts = parsed_frame.pts;
-        */
-        /* Opaque reordering breaks the internal pkt logic.
-         * So set pkt_pts and clear all the other pkt_ fields.
-         */
-        frame->duration = 0;
-
-        /*if (!parsed_frame.progressive_frame)
-            frame->flags |= AV_FRAME_FLAG_INTERLACED;
-
-        if ((frame->flags & AV_FRAME_FLAG_INTERLACED) && parsed_frame.top_field_first)
-            frame->flags |= AV_FRAME_FLAG_TOP_FIELD_FIRST;
-        */
-    } else if (ctx->decoder_flushing) {
-        ret = AVERROR_EOF;
-    } else {
-        ret = AVERROR(EAGAIN);
-    }
-    return ret;
-}
 
 static av_cold int rocdec_decode_end(AVCodecContext *avctx)
 {

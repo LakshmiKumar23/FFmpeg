@@ -195,6 +195,8 @@ static int rocdecode_transfer_get_formats(AVHWFramesContext *ctx,
 static int rocdecode_transfer_data(AVHWFramesContext *ctx, AVFrame *dst,
                                 const AVFrame *src)
 {
+    static int count = 0;
+    printf("rocdecode_transfer_data - %d\n", count++);
     RocDecodeFramesContext       *priv = ctx->hwctx;
     AVHWDeviceContext *device_ctx = ctx->device_ctx;
     AVRocDecodeDeviceContext    *hwctx = device_ctx->hwctx;
