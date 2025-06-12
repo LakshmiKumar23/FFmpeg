@@ -1771,6 +1771,24 @@ Choose the second device on the system.
 Choose the first device and use the primary device context.
 @end table
 
+@item hip
+@var{device} is the number of the AMD GPU device.
+
+The following options are recognized:
+@table @option
+@item primary_ctx
+If set to 1, uses the primary device context instead of creating a new one.
+@end table
+
+Examples:
+@table @emph
+@item -init_hw_device hip:1
+Choose the second device on the system.
+
+@item -init_hw_device hip:0,primary_ctx=1
+Choose the first device and use the primary device context.
+@end table
+
 @item dxva2
 @var{device} is the number of the Direct3D 9 display adapter.
 

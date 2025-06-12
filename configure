@@ -344,6 +344,7 @@ External library support:
   --enable-cuda-nvcc       enable Nvidia CUDA compiler [no]
   --disable-cuda-llvm      disable CUDA compilation using clang [autodetect]
   --disable-cuvid          disable Nvidia CUVID support [autodetect]
+  --disable-rocdec         disable AMD rocdecode support [autodetect]
   --disable-d3d11va        disable Microsoft Direct3D 11 video acceleration code [autodetect]
   --disable-d3d12va        disable Microsoft Direct3D 12 video acceleration code [autodetect]
   --disable-dxva2          disable Microsoft DirectX 9 video acceleration code [autodetect]
@@ -2018,6 +2019,7 @@ HWACCEL_AUTODETECT_LIBRARY_LIST="
     libdrm
     nvdec
     nvenc
+    rocdec
     vaapi
     vdpau
     videotoolbox
@@ -4824,6 +4826,7 @@ tmpfile TMPS   .S
 tmpfile TMPSH  .sh
 tmpfile TMPV   .ver
 
+
 unset -f mktemp
 
 chmod +x $TMPE
@@ -7347,6 +7350,10 @@ if enabled uwp; then
     mediafoundation_extralibs="-lmfplat $mediafoundation_extralibs"
 fi
 
+enabled rocdec && add_cppflags '-I/opt/rocm/include/' && add_cppflags '-I/opt/rocm/share/' \
+        && add_cppflags '-D__HIP_PLATFORM_AMD__' && add_extralibs '/opt/rocm/lib/librocdecode.so'
+enabled rocdec && check_headers rocdecode/rocdecode.h
+
 enabled libdrm &&
     check_pkg_config libdrm_getfb2 libdrm "xf86drmMode.h" drmModeGetFB2
 
@@ -7473,6 +7480,31 @@ fi
 enabled amf &&
     check_cpp_condition amf "AMF/core/Version.h" \
         "(AMF_VERSION_MAJOR << 48 | AMF_VERSION_MINOR << 32 | AMF_VERSION_RELEASE << 16 | AMF_VERSION_BUILD_NUM) >= 0x0001000400230000"
+
+if enabled x86; then
+    case $target_os in
+        freebsd|mingw32*|mingw64*|win32|win64|cygwin*)
+            disable rocdec
+            ;;
+        *)
+            ;;
+    esac
+elif enabled_any aarch64 ppc64 && ! enabled bigendian; then
+    case $target_os in
+        linux)
+            ;;
+        *)
+            disable rocdec
+            ;;
+    esac
+else
+    disable rocdec
+fi
+
+if enabled rocdec; then
+    check_cpp_condition rocdec "rocdecode/rocdecode_version.h" \
+        "(ROCDECODE_CHECK_VERSION(0,6,0))"
+fi
 
 # Funny iconv installations are not unusual, so check it after all flags have been set
 if enabled libc_iconv; then
